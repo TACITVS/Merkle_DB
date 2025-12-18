@@ -13,13 +13,11 @@ defmodule MerkleDb.Web.Router do
   # --- JOB CONTROLS ---
 
   post "/job/start" do
-    # CHECK FIRST: Do we have data?
     tree = KV.snapshot()
     if tree.count > 0 do
       JobScheduler.start_job()
       send_resp(conn, 200, "Started")
     else
-      # Safety: Don't start if empty. Tell the user.
       send_resp(conn, 400, "Database is empty! Please click 'Ingest' first.")
     end
   end
@@ -50,11 +48,8 @@ defmodule MerkleDb.Web.Router do
   end
 
   get "/job/status" do
-    # Ensure process is alive before asking
     if Process.whereis(JobScheduler) == nil, do: JobScheduler.start_link(nil)
-    
     status = JobScheduler.get_status()
-    
     topics_json = 
       status.topics 
       |> Enum.map(fn t -> "{\"label\": \"#{escape(t.label)}\", \"count\": #{t.count}}" end)
@@ -68,10 +63,7 @@ defmodule MerkleDb.Web.Router do
       "topics": [#{topics_json}]
     }
     """
-    
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(200, json)
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
   end
 
   # --- STANDARD ENDPOINTS ---
@@ -79,10 +71,11 @@ defmodule MerkleDb.Web.Router do
   get "/" do
     if Process.whereis(JobScheduler) == nil, do: JobScheduler.start_link(nil)
     if Process.whereis(Progress) == nil, do: Progress.start_link(nil)
-    
-    conn
-    |> put_resp_content_type("text/html")
-    |> send_file(200, Application.app_dir(:merkle_db, "priv/static/index.html"))
+    conn |> put_resp_content_type("text/html") |> send_file(200, Application.app_dir(:merkle_db, "priv/static/index.html"))
+  end
+
+  get "/favicon.ico" do
+    send_resp(conn, 204, "")
   end
 
   post "/ingest" do
@@ -90,7 +83,6 @@ defmodule MerkleDb.Web.Router do
       send_resp(conn, 429, "Busy")
     else
       path = "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt"
-      
       if File.exists?(path) do
         Application.put_env(:merkle_db, :ingesting, true)
         Task.start(fn -> 
@@ -107,45 +99,50 @@ defmodule MerkleDb.Web.Router do
     end
   end
 
-  post "/tune" do
-    try do
-      report = Tuner.run_analysis()
-      send_resp(conn, 200, "{\"recommended\": #{report.recommended_threshold}}")
-    catch e -> 
-      send_resp(conn, 500, "Error: #{inspect(e)}") 
-    end
-  end
-
   get "/analytics/summary" do
-    tree = KV.snapshot()
-    if tree.count > 0 do
-      # Calculate stats for first few dims as sample
-      stats = for i <- 0..min(tree.dim-1, 5) do
-        Analytics.column_stats(tree, i)
+    try do
+      tree = KV.snapshot()
+      if tree.count > 0 and tree.dim > 0 do
+        stats = for i <- 0..min(tree.dim - 1, 5) do
+          MerkleDb.Analytics.column_stats(tree, i)
+        end
+        
+        safe_stats = Enum.map(stats, fn m -> 
+          Map.new(m, fn {k, v} -> 
+            # Simple check for NaN/Inf which Jason hates
+            if is_float(v) and (v > 1.0e300 or v < -1.0e300 or v != v) do
+              {k, 0.0}
+            else
+              {k, v}
+            end
+          end)
+        end)
+
+        json = %{
+          count: tree.count,
+          dim: tree.dim,
+          indexed: tree.centroids != nil,
+          sample_stats: safe_stats
+        } |> Jason.encode!()
+        
+        conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+      else
+        json = %{count: 0, dim: 0, indexed: false, sample_stats: []} |> Jason.encode!()
+        conn |> put_resp_content_type("application/json") |> send_resp(200, json)
       end
-      
-      json = """
-      {
-        "count": #{tree.count},
-        "dim": #{tree.dim},
-        "indexed": #{if tree.centroids, do: "true", else: "false"},
-        "sample_stats": #{Jason.encode!(stats)}
-      }
-      """
-      conn |> put_resp_content_type("application/json") |> send_resp(200, json)
-    else
-      send_resp(conn, 404, "Empty")
+    rescue
+      e -> 
+        error_msg = "🔴 Summary Error: #{inspect(e)}"
+        IO.puts(error_msg)
+        File.write!("server_error.log", error_msg, [:append])
+        send_resp(conn, 500, "Error: #{inspect(e)}")
     end
   end
 
   get "/analytics/pca" do
     tree = KV.snapshot()
     if tree.count > 50 do
-      # Run PCA to 2D for visualization
-      pca_res = Analytics.reduce_dimensions(tree, 2)
-      # We need a transform function in NIF to actually project the data.
-      # For now, let's assume we can transform.
-      # Since we don't have transform bridged yet, let's return success metadata.
+      _pca_res = MerkleDb.Analytics.reduce_dimensions(tree, 2)
       send_resp(conn, 200, "{\"status\": \"Ready\", \"total_variance\": 1.0}")
     else
       send_resp(conn, 400, "Need more data for PCA")
@@ -155,34 +152,18 @@ defmodule MerkleDb.Web.Router do
   get "/search" do
     conn = fetch_query_params(conn)
     query_text = conn.query_params["q"]
-    limit_param = conn.query_params["limit"] || "500"
-    limit = case Integer.parse(limit_param) do {n, _} -> min(n, 2000); :error -> 500 end
-    threshold_param = conn.query_params["threshold"] || "0.30"
-    threshold = case Float.parse(threshold_param) do {n, _} -> n; :error -> 0.30 end
-    exact_match = conn.query_params["exact"] == "true"
-    search_depth = if exact_match, do: limit * 20, else: limit
+    limit = case Integer.parse(conn.query_params["limit"] || "500") do {n, _} -> min(n, 2000); :error -> 500 end
+    threshold = case Float.parse(conn.query_params["threshold"] || "0.30") do {n, _} -> n; :error -> 0.30 end
     
     if query_text do
       {time_us, results} = :timer.tc(fn -> 
         q_vec = TextEmbedding.embed(query_text)
         root = KV.snapshot()
-        Query.execute(root, [:knn, q_vec, search_depth, threshold])
+        Query.execute(root, [:knn, q_vec, limit, threshold])
       end)
       
       json_list = 
         results
-        |> Stream.map(fn {key, dist, _vec} -> 
-           {key, dist, TextStore.get(key)}
-        end)
-        |> Stream.filter(fn {_key, _dist, text} -> 
-           if exact_match do
-             safe_q = Regex.escape(query_text)
-             Regex.match?(~r/\b#{safe_q}\b/i, text)
-           else
-             true
-           end
-        end)
-        |> Stream.take(limit)
         |> Enum.map(fn {key, dist} -> 
            txt = TextStore.get(key) || ""
            "{\"id\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
@@ -217,7 +198,7 @@ defmodule MerkleDb.Web.Router do
     IO.puts("\n✅ Ingestion Complete! Database ready.")
   end
 
-  defp escape(str) do
+    defp escape(str) do
     str
     |> String.replace("\\", "\\\\")
     |> String.replace("\"", "\\\"")
@@ -226,3 +207,5 @@ defmodule MerkleDb.Web.Router do
     |> String.replace("\t", " ")
   end
 end
+
+

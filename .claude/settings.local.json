@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mix run:*)",
+      "Bash(mix compile:*)",
+      "Bash(elixir:*)"
+    ]
+  }
+}

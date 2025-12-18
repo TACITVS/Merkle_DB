@@ -21,7 +21,7 @@ defmodule BridgeGeneratorV7 do
 
   @struct_fields %{
     "KMeansResult" => [
-      {:centroids, "double*", :binary}, 
+      {:centroids, "double*", :binary},
       {:assignments, "int*", :binary},
       {:inertia, "double", :scalar},
       {:converged, "int", :scalar}
@@ -35,6 +35,23 @@ defmodule BridgeGeneratorV7 do
       {:converged, "int", :scalar}
     ]
   }
+
+  # Functions that require dirty scheduler (CPU-bound, >1ms execution)
+  @dirty_functions [
+    "fp_kmeans_f64",
+    "fp_pca_fit",
+    "fp_pca_generate_ellipse_data",
+    "fp_pca_generate_low_rank_data",
+    "fp_neural_network_train",
+    "fp_neural_network_create",
+    "fp_gaussian_nb_train",
+    "fp_multinomial_nb_train"
+  ]
+
+  defp should_use_dirty?(func_name) do
+    func_name in @dirty_functions or
+    String.contains?(func_name, ["train", "fit", "generate_low_rank", "generate_ellipse"])
+  end
 
   def run do
     IO.puts "--- 🏗️  BRIDGE GENERATOR V7 (ZERO-COPY / ACCESSORS) 🏗️  ---"
@@ -118,7 +135,10 @@ defmodule BridgeGeneratorV7 do
     end) |> Enum.join(",\n    ")
 
     wrappers = Enum.map_join(funcs, "\n\n", &generate_c_wrapper/1)
-    entries = Enum.map_join(funcs, ",\n    ", fn f -> "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}}" end)
+    entries = Enum.map_join(funcs, ",\n    ", fn f ->
+      dirty_flag = if should_use_dirty?(f.name), do: ", ERL_NIF_DIRTY_JOB_CPU_BOUND", else: ""
+      "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}#{dirty_flag}}"
+    end)
     
     File.write!(@c_nif_out, "// GENERATED V7\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { \n    #{entries},\n    #{accessor_entries} \n}; \nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
   end
@@ -129,17 +149,17 @@ defmodule BridgeGeneratorV7 do
         #{struct_type}* res;
         if (!enif_get_resource(env, argv[0], RES_TYPE_#{struct_type}, (void**)&res)) return enif_make_badarg(env);
         #{case mode do
-          :scalar -> 
+          :scalar ->
             case field_type do
               "double" -> "return enif_make_double(env, res->#{field_name});"
               "int" -> "return enif_make_int(env, res->#{field_name});"
               _ -> "return enif_make_badarg(env);"
             end
-          :binary -> 
+          :binary ->
             "ErlNifUInt64 size; if (!enif_get_uint64(env, argv[1], &size)) return enif_make_badarg(env); ErlNifBinary bin; enif_alloc_binary((size_t)size, &bin); memcpy(bin.data, res->#{field_name}, (size_t)size); return enif_make_binary(env, &bin);"
         end}
     }
-    ""
+    """
   end
 
   defp generate_c_wrapper(func) do
@@ -238,9 +258,9 @@ defmodule BridgeGeneratorV7 do
       "@doc \"Calls C function: #{f.name}\"\ndef #{f.name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
     end)
 
-    accessor_defs = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} -> 
-      Enum.map_join(fields, "\n", fn {field_name, _, _} -> 
-        "def get_#{struct_type}_#{field_name}(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)"
+    accessor_defs = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} ->
+      Enum.map_join(fields, "\n", fn {field_name, _, _} ->
+        "def get_#{struct_type}_#{field_name}(res, size \\\\ 0), do: :erlang.nif_error(:nif_not_loaded)"
       end)
     end)
 
