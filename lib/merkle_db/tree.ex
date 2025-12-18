@@ -5,10 +5,10 @@ defmodule MerkleDb.Tree do
   # count: Total number of vectors.
   # dim: Number of dimensions.
   
-  defstruct columns: nil, keys: %{}, count: 0, dim: 0
+  defstruct columns: nil, keys: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}
 
   def new do
-    %MerkleDb.Tree{columns: nil, keys: %{}, count: 0, dim: 0}
+    %MerkleDb.Tree{columns: nil, keys: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}}
   end
 
   def insert(tree, key, vector_bin) do

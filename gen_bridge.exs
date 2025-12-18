@@ -19,12 +19,30 @@ defmodule BridgeGeneratorV7 do
     "TrainingResult" => "fp_training_result_free"
   }
 
+  @struct_fields %{
+    "KMeansResult" => [
+      {:centroids, "double*", :binary}, 
+      {:assignments, "int*", :binary},
+      {:inertia, "double", :scalar},
+      {:converged, "int", :scalar}
+    ],
+    "PCAModel" => [
+      {:n_components, "int", :scalar},
+      {:eigenvalues, "double*", :binary},
+      {:total_variance, "double", :scalar}
+    ],
+    "PCAResult" => [
+      {:converged, "int", :scalar}
+    ]
+  }
+
   def run do
-    IO.puts "--- 🏗️  BRIDGE GENERATOR V7 (ZERO-COPY / DIRTY NIFS) 🏗️  ---"
+    IO.puts "--- 🏗️  BRIDGE GENERATOR V7 (ZERO-COPY / ACCESSORS) 🏗️  ---"
     headers = @allowed_headers |> Enum.map(&Path.join(@include_dir, &1)) |> Enum.filter(&File.exists?/1)
     functions = headers |> Enum.flat_map(&parse_header/1) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
     bridgable_functions = Enum.filter(functions, &supported_signature?/1)
     IO.puts "✅ Found #{length(bridgable_functions)} bridgable functions."
+    
     generate_c_nif(bridgable_functions, headers)
     generate_elixir_module(bridgable_functions)
     IO.puts "--- 🚀 BRIDGE V7 COMPLETE 🚀 ---"
@@ -68,6 +86,12 @@ defmodule BridgeGeneratorV7 do
     destructors_code = Enum.map_join(@destructors, "\n\n", fn {type, free_fn} -> "void dtor_#{type}(ErlNifEnv* env, void* obj) { #{type}* res = (#{type}*)obj; #{free_fn}(res); }" end)
     res_init = Enum.map_join(@destructors, "\n    ", fn {type, _} -> "RES_TYPE_#{type} = enif_open_resource_type(env, NULL, \"#{type}\", dtor_#{type}, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);" end)
 
+    accessors = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} -> 
+      Enum.map_join(fields, "\n", fn {field_name, field_type, mode} -> 
+        generate_accessor_c(struct_type, field_name, field_type, mode)
+      end)
+    end)
+
     preamble = """
     #include <stdbool.h>
     #include <string.h>
@@ -84,10 +108,38 @@ defmodule BridgeGeneratorV7 do
     #{res_decls}
     static void fp_pca_free_result_internal(PCAResult* res) { fp_pca_free_model(&res->model); }
     #{destructors_code}
+    #{accessors}
     """
+    
+    accessor_entries = Enum.flat_map(@struct_fields, fn {struct_type, fields} -> 
+      Enum.map(fields, fn {field_name, _, _} -> 
+        "{\"get_#{struct_type}_#{field_name}\", 2, nif_get_#{struct_type}_#{field_name}}"
+      end)
+    end) |> Enum.join(",\n    ")
+
     wrappers = Enum.map_join(funcs, "\n\n", &generate_c_wrapper/1)
     entries = Enum.map_join(funcs, ",\n    ", fn f -> "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}}" end)
-    File.write!(@c_nif_out, "// GENERATED V7 - ZERO-COPY\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { #{entries} };\nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
+    
+    File.write!(@c_nif_out, "// GENERATED V7\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { \n    #{entries},\n    #{accessor_entries} \n}; \nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
+  end
+
+  defp generate_accessor_c(struct_type, field_name, field_type, mode) do
+    """
+    static ERL_NIF_TERM nif_get_#{struct_type}_#{field_name}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+        #{struct_type}* res;
+        if (!enif_get_resource(env, argv[0], RES_TYPE_#{struct_type}, (void**)&res)) return enif_make_badarg(env);
+        #{case mode do
+          :scalar -> 
+            case field_type do
+              "double" -> "return enif_make_double(env, res->#{field_name});"
+              "int" -> "return enif_make_int(env, res->#{field_name});"
+              _ -> "return enif_make_badarg(env);"
+            end
+          :binary -> 
+            "ErlNifUInt64 size; if (!enif_get_uint64(env, argv[1], &size)) return enif_make_badarg(env); ErlNifBinary bin; enif_alloc_binary((size_t)size, &bin); memcpy(bin.data, res->#{field_name}, (size_t)size); return enif_make_binary(env, &bin);"
+        end}
+    }
+    ""
   end
 
   defp generate_c_wrapper(func) do
@@ -114,13 +166,7 @@ defmodule BridgeGeneratorV7 do
     end)
     
     body = if func.return_type in Map.keys(@destructors) do
-      """
-      #{func.return_type} res = #{func.name}(#{call_args});
-          #{func.return_type}* res_ptr = enif_alloc_resource(RES_TYPE_#{func.return_type}, sizeof(#{func.return_type}));
-          *res_ptr = res;
-          ERL_NIF_TERM ret_res = enif_make_resource(env, res_ptr);
-          enif_release_resource(res_ptr);
-      """
+      "#{func.return_type} res = #{func.name}(#{call_args}); #{func.return_type}* res_ptr = enif_alloc_resource(RES_TYPE_#{func.return_type}, sizeof(#{func.return_type})); *res_ptr = res; ERL_NIF_TERM ret_res = enif_make_resource(env, res_ptr); enif_release_resource(res_ptr);"
     else
       if func.return_type == "void" do
         "#{func.name}(#{call_args});"
@@ -191,7 +237,14 @@ defmodule BridgeGeneratorV7 do
       end)
       "@doc \"Calls C function: #{f.name}\"\ndef #{f.name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
     end)
-    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\nend")
+
+    accessor_defs = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} -> 
+      Enum.map_join(fields, "\n", fn {field_name, _, _} -> 
+        "def get_#{struct_type}_#{field_name}(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)"
+      end)
+    end)
+
+    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}\nend")
   end
 end
 

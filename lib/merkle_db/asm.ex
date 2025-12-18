@@ -543,4 +543,14 @@ def fp_zip_add_u8(a, b, size_out, n), do: :erlang.nif_error(:nif_not_loaded)
 
 @doc "Calls C function: fp_zip_with_index_i64"
 def fp_zip_with_index_i64(input, size_output, n), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- Struct Accessors ---
+def get_KMeansResult_centroids(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_KMeansResult_assignments(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_KMeansResult_inertia(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_KMeansResult_converged(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_PCAModel_n_components(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_PCAModel_eigenvalues(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_PCAModel_total_variance(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+def get_PCAResult_converged(res, size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
 end
