@@ -147,8 +147,9 @@ defmodule MerkleDb.Web.Router do
            end
         end)
         |> Stream.take(limit)
-        |> Enum.map(fn {key, dist, txt} -> 
-           "{\"verse\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
+        |> Enum.map(fn {key, dist} -> 
+           txt = TextStore.get(key) || ""
+           "{\"id\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
         end)
         |> Enum.join(",")
       

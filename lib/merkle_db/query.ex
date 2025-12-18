@@ -20,34 +20,29 @@ defmodule MerkleDb.Query do
     accumulator = ASM.fp_replicate_f64(output_size, count, 0.0) 
 
     # 3. HIGH-SPEED COLUMNAR LOOP (The "Forest" Approach)
-    #    Instead of looping 8,000 times (once per verse), we loop 64 times (once per dimension).
-    #    In each pass, the Assembly multiplies the ENTIRE column by the query scalar 
-    #    and adds it to the accumulator.
-    #    Math: Accumulator += Column[d] * Query[d]
+    #    We loop over the actual dimensions stored in the tree.
     
     final_scores_bin = 
-      Enum.with_index(q_norm)
+      q_norm
+      |> Enum.with_index()
       |> Enum.reduce(accumulator, fn {q_val, dim_idx}, acc_bin ->
         # Get the massive binary column for this dimension
         column_bin = elem(tree.columns, dim_idx)
         
         # ASM Call: Out = (Column * Scalar) + Accumulator
-        # This single call processes 8,000 verses in parallel/SIMD.
         ASM.fp_map_axpy_f64(column_bin, acc_bin, output_size, count, q_val)
       end)
 
     # 4. Extract Scores and Sort
-    #    Convert the binary blob of scores back to a list
     scores_list = for <<s::little-float-size(64) <- final_scores_bin>>, do: s
     
     scores_list
     |> Stream.with_index()
     |> Stream.map(fn {score, idx} -> 
-       # Map index back to Verse Key
-       {Map.get(tree.keys, idx), score, nil} 
+       {Map.get(tree.keys, idx), score} 
     end)
-    |> Stream.filter(fn {_, score, _} -> score >= threshold end)
-    |> Enum.sort_by(fn {_, score, _} -> score end, :desc)
+    |> Stream.filter(fn {_, score} -> score >= threshold end)
+    |> Enum.sort_by(fn {_, score} -> score end, :desc)
     |> Enum.take(k)
   end
 end
