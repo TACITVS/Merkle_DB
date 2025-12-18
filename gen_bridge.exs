@@ -1,4 +1,4 @@
-defmodule BridgeGeneratorV6 do
+defmodule BridgeGeneratorV7 do
   @include_dir "native/fp_lib/include"
   @c_nif_out "native/generated_nif.c"
   @ex_module_out "lib/merkle_db/asm.ex"
@@ -20,14 +20,14 @@ defmodule BridgeGeneratorV6 do
   }
 
   def run do
-    IO.puts "--- 🏗️  BRIDGE GENERATOR V6 (RESOURCE OBJECTS) 🏗️  ---"
+    IO.puts "--- 🏗️  BRIDGE GENERATOR V7 (ZERO-COPY / DIRTY NIFS) 🏗️  ---"
     headers = @allowed_headers |> Enum.map(&Path.join(@include_dir, &1)) |> Enum.filter(&File.exists?/1)
     functions = headers |> Enum.flat_map(&parse_header/1) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
     bridgable_functions = Enum.filter(functions, &supported_signature?/1)
     IO.puts "✅ Found #{length(bridgable_functions)} bridgable functions."
     generate_c_nif(bridgable_functions, headers)
     generate_elixir_module(bridgable_functions)
-    IO.puts "--- 🚀 BRIDGE V6 COMPLETE 🚀 ---"
+    IO.puts "--- 🚀 BRIDGE V7 COMPLETE 🚀 ---"
   end
 
   defp parse_header(file) do
@@ -71,40 +71,47 @@ defmodule BridgeGeneratorV6 do
     preamble = """
     #include <stdbool.h>
     #include <string.h>
-    #include <malloc.h>
+    #ifdef __GNUC__
+      #define _SAVED_GNUC_ __GNUC__ 
+      #undef __GNUC__
+    #endif
+    #include <erl_nif.h>
+    #ifdef _SAVED_GNUC_
+      #define __GNUC__ _SAVED_GNUC__
+      #undef _SAVED_GNUC_
+    #endif
     #{include_directives}
     #{res_decls}
     static void fp_pca_free_result_internal(PCAResult* res) { fp_pca_free_model(&res->model); }
     #{destructors_code}
-    static void* alloc_aligned(size_t size) {
-        #ifdef _WIN32
-            return _aligned_malloc(size, 32);
-        #else
-            void* p; if (posix_memalign(&p, 32, size) != 0) return NULL; return p;
-        #endif
-    }
-    static void free_aligned(void* p) {
-        #ifdef _WIN32
-            _aligned_free(p);
-        #else
-            free(p);
-        #endif
-    }
     """
     wrappers = Enum.map_join(funcs, "\n\n", &generate_c_wrapper/1)
     entries = Enum.map_join(funcs, ",\n    ", fn f -> "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}}" end)
-    File.write!(@c_nif_out, "// GENERATED V6\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { #{entries} };\nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
+    File.write!(@c_nif_out, "// GENERATED V7 - ZERO-COPY\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { #{entries} };\nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
   end
 
   defp generate_c_wrapper(func) do
     setup = Enum.with_index(func.args) |> Enum.map_join("\n    ", fn {arg, i} ->
       cond do
-        arg.type in Map.keys(@destructors) -> "#{arg.type}* res_#{arg.name}; if (!enif_get_resource(env, argv[#{i}], RES_TYPE_#{arg.type}, (void**)&res_#{arg.name})) return enif_make_badarg(env);"
-        arg.is_ptr -> if arg.is_const, do: "ErlNifBinary bin_#{arg.name}; if (!enif_inspect_binary(env, argv[#{i}], &bin_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)alloc_aligned(bin_#{arg.name}.size); memcpy(ptr_#{arg.name}, bin_#{arg.name}.data, bin_#{arg.name}.size);", else: "ErlNifUInt64 size_#{arg.name}; if (!enif_get_uint64(env, argv[#{i}], &size_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)alloc_aligned((size_t)size_#{arg.name});"
+        arg.type in Map.keys(@destructors) -> 
+            "#{arg.type}* res_#{arg.name}; if (!enif_get_resource(env, argv[#{i}], RES_TYPE_#{arg.type}, (void**)&res_#{arg.name})) return enif_make_badarg(env);"
+        arg.is_ptr -> 
+            if arg.is_const do
+                "ErlNifBinary bin_#{arg.name}; if (!enif_inspect_binary(env, argv[#{i}], &bin_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)bin_#{arg.name}.data;"
+            else
+                "ErlNifUInt64 size_#{arg.name}; if (!enif_get_uint64(env, argv[#{i}], &size_#{arg.name})) return enif_make_badarg(env); ErlNifBinary out_bin_#{arg.name}; enif_alloc_binary((size_t)size_#{arg.name}, &out_bin_#{arg.name}); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)out_bin_#{arg.name}.data;"
+            end
         true -> parse_scalar(arg.type, "val_#{arg.name}", i)
       end
     end)
-    call_args = Enum.map_join(func.args, ", ", fn arg -> cond do; arg.type in Map.keys(@destructors) -> (if arg.is_ptr, do: "res_#{arg.name}", else: "*res_#{arg.name}"); arg.is_ptr -> "ptr_#{arg.name}"; true -> "val_#{arg.name}"; end; end)
+
+    call_args = Enum.map_join(func.args, ", ", fn arg -> 
+        cond do
+            arg.type in Map.keys(@destructors) -> (if arg.is_ptr, do: "res_#{arg.name}", else: "*res_#{arg.name}")
+            arg.is_ptr -> "ptr_#{arg.name}"
+            true -> "val_#{arg.name}"
+        end
+    end)
     
     body = if func.return_type in Map.keys(@destructors) do
       """
@@ -122,13 +129,9 @@ defmodule BridgeGeneratorV6 do
       end
     end
 
-    outputs = Enum.filter(func.args, fn a -> a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)) end)
-    teardown_inputs = Enum.filter(func.args, fn a -> a.is_ptr and a.is_const and not (a.type in Map.keys(@destructors)) end) |> Enum.map_join("\n    ", fn a -> "free_aligned(ptr_#{a.name});" end)
-    output_processing = Enum.map_join(outputs, "\n    ", fn arg -> "ErlNifBinary out_bin_#{arg.name}; enif_alloc_binary((size_t)size_#{arg.name}, &out_bin_#{arg.name}); memcpy(out_bin_#{arg.name}.data, ptr_#{arg.name}, (size_t)size_#{arg.name}); free_aligned(ptr_#{arg.name});" end)
-    
-    return_stmt = construct_return_v2(func.return_type, outputs)
+    return_stmt = construct_return_v3(func.return_type, Enum.filter(func.args, fn a -> a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)) end))
 
-    "static ERL_NIF_TERM nif_#{func.name}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {\n    #{setup}\n    #{body}\n    #{teardown_inputs}\n    #{output_processing}\n    #{return_stmt}\n}"
+    "static ERL_NIF_TERM nif_#{func.name}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {\n    #{setup}\n    #{body}\n    #{return_stmt}\n}"
   end
 
   defp parse_scalar(type, var, i) do
@@ -151,7 +154,7 @@ defmodule BridgeGeneratorV6 do
     end
   end
 
-  defp construct_return_v2(ret_type, outputs) do
+  defp construct_return_v3(ret_type, outputs) do
     if ret_type in Map.keys(@destructors) do
       out_terms = Enum.map(outputs, fn arg -> "enif_make_binary(env, &out_bin_#{arg.name})" end)
       if length(out_terms) == 0, do: "return ret_res;", else: "return enif_make_tuple#{length(out_terms) + 1}(env, #{Enum.join(["ret_res" | out_terms], ", ")});"
@@ -180,12 +183,16 @@ defmodule BridgeGeneratorV6 do
   defp box_return(_), do: "enif_make_int(env, 0)"
 
   defp generate_elixir_module(funcs) do
+    reserved = ["end", "fn", "do", "in", "true", "false", "nil", "after", "catch", "else", "rescue", "quote", "unquote"]
     defs = Enum.map_join(funcs, "\n\n", fn f ->
-      args = Enum.map_join(f.args, ", ", fn a -> if a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)), do: "_size_#{a.name}", else: "_#{a.name}" end)
+      args = Enum.map_join(f.args, ", ", fn a -> 
+        name = if a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)), do: "size_#{a.name}", else: "#{a.name}"
+        if name in reserved, do: "#{name}_", else: name
+      end)
       "@doc \"Calls C function: #{f.name}\"\ndef #{f.name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
     end)
     File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\nend")
   end
 end
 
-BridgeGeneratorV6.run()
+BridgeGeneratorV7.run()
