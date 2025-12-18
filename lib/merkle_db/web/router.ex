@@ -103,12 +103,16 @@ defmodule MerkleDb.Web.Router do
     try do
       tree = KV.snapshot()
       if tree.count > 0 and tree.dim > 0 do
+        # Get stats for first 6 dimensions (0-5)
         stats = for i <- 0..min(tree.dim - 1, 5) do
-          MerkleDb.Analytics.column_stats(tree, i)
+          case MerkleDb.Analytics.column_stats(tree, i) do
+            {:ok, stat_map} -> stat_map
+            {:error, _} -> %{mean: 0.0, min: 0.0, max: 0.0, count: 0, dimension: i}
+          end
         end
-        
-        safe_stats = Enum.map(stats, fn m -> 
-          Map.new(m, fn {k, v} -> 
+
+        safe_stats = Enum.map(stats, fn m ->
+          Map.new(m, fn {k, v} ->
             # Simple check for NaN/Inf which Jason hates
             if is_float(v) and (v > 1.0e300 or v < -1.0e300 or v != v) do
               {k, 0.0}
