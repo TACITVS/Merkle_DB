@@ -7,13 +7,10 @@ defmodule MerkleDb.Application do
     MerkleDb.Storage.init()
 
     children = [
-      # 1. The Vector Database (Holds the numbers in RAM)
       MerkleDb.KV,
-
-      # 2. The Text Database (Holds the verses on Disk)
       MerkleDb.TextStore,
-
-      # 3. The Web Server
+      MerkleDb.Progress,
+      MerkleDb.JobScheduler,
       {Plug.Cowboy, scheme: :http, plug: MerkleDb.Web.Router, options: [port: 4000]}
     ]
 
