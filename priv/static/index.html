@@ -1569,6 +1569,12 @@
 
                         const result = await this.parseJsonResponse(resp);
 
+                        if (resp.status === 409 && result.error === 'bootstrap_already_running') {
+                            this.bootstrapAutoStarted = true;
+                            this.bootstrapBusy = true;
+                            return;
+                        }
+
                         if (!resp.ok) {
                             throw new Error(result.error || `Request failed (${resp.status})`);
                         }
@@ -1626,6 +1632,13 @@
 
                 maybeAutoBootstrap() {
                     if (this.bootstrapAutoStarted || this.bootstrapBusy) {
+                        return;
+                    }
+
+                    const status = this.bootstrap?.status || 'idle';
+                    if (!['idle', 'done', 'error', 'cancelled'].includes(status)) {
+                        this.bootstrapAutoStarted = true;
+                        this.bootstrapBusy = true;
                         return;
                     }
 
