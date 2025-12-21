@@ -62,7 +62,12 @@ defmodule MerkleDb.TextStore do
 
   @impl true
   def handle_call(:count, _from, state) do
-    count = :dets.info(@table, :size) || 0
+    count =
+      case :dets.info(@table, :size) do
+        :undefined -> 0
+        nil -> 0
+        size -> size
+      end
     {:reply, count, state}
   end
 
