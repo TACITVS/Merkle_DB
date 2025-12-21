@@ -78,23 +78,29 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/ingest" do
-    if Application.get_env(:merkle_db, :ingesting, false) do
-      send_resp(conn, 429, "Busy")
-    else
-      path = "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt"
-      if File.exists?(path) do
-        Application.put_env(:merkle_db, :ingesting, true)
-        Task.start(fn -> 
-          try do
-            ingest_bible(path)
-          after
-            Application.put_env(:merkle_db, :ingesting, false)
+    case ensure_allowed(conn, :ingest) do
+      {:error, conn} ->
+        conn
+
+      {:ok, conn} ->
+        if Application.get_env(:merkle_db, :ingesting, false) do
+          send_resp(conn, 429, "Busy")
+        else
+          path = "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt"
+          if File.exists?(path) do
+            Application.put_env(:merkle_db, :ingesting, true)
+            Task.start(fn ->
+              try do
+                ingest_bible(path)
+              after
+                Application.put_env(:merkle_db, :ingesting, false)
+              end
+            end)
+            send_resp(conn, 202, "Started")
+          else
+            send_resp(conn, 404, "File not found")
           end
-        end)
-        send_resp(conn, 202, "Started")
-      else
-        send_resp(conn, 404, "File not found")
-      end
+        end
     end
   end
 
@@ -143,12 +149,18 @@ defmodule MerkleDb.Web.Router do
   end
 
   get "/analytics/pca" do
-    tree = KV.snapshot()
-    if tree.count > 50 do
-      _pca_res = MerkleDb.Analytics.reduce_dimensions(tree, 2)
-      send_resp(conn, 200, "{\"status\": \"Ready\", \"total_variance\": 1.0}")
-    else
-      send_resp(conn, 400, "Need more data for PCA")
+    case ensure_allowed(conn, :visualize) do
+      {:error, conn} ->
+        conn
+
+      {:ok, conn} ->
+        tree = KV.snapshot()
+        if tree.count > 50 do
+          _pca_res = MerkleDb.Analytics.reduce_dimensions(tree, 2)
+          send_resp(conn, 200, "{\"status\": \"Ready\", \"total_variance\": 1.0}")
+        else
+          send_resp(conn, 400, "Need more data for PCA")
+        end
     end
   end
 
@@ -163,91 +175,103 @@ defmodule MerkleDb.Web.Router do
       _ -> 500
     end
 
-    tree = KV.snapshot()
-
-    if tree.count > 50 do
-      try do
-        {time_us, pca_result} = :timer.tc(fn ->
-          Analytics.reduce_dimensions(tree, components)
-        end)
-
-        embeddings = Analytics.extract_pca_embeddings(pca_result, tree, components, limit)
-
-        # TODO: Extract actual variance_explained from PCA result
-        json = %{
-          embeddings: embeddings,
-          variance_explained: List.duplicate(0.33, components),
-          total_variance: 0.95,
-          computation_time_ms: Float.round(time_us / 1000.0, 2),
-          parameters: %{
-            n_components: components,
-            n_vectors: min(tree.count, limit),
-            algorithm: "PCA"
-          }
-        } |> Jason.encode!()
-
+    case ensure_allowed(conn, :visualize) do
+      {:error, conn} ->
         conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, json)
-      rescue
-        e ->
-          error_msg = "PCA failed: #{inspect(e)}"
-          IO.puts(error_msg)
+
+      {:ok, conn} ->
+        tree = KV.snapshot()
+
+        if tree.count > 50 do
+          try do
+            {time_us, pca_result} = :timer.tc(fn ->
+              Analytics.reduce_dimensions(tree, components)
+            end)
+
+            embeddings = Analytics.extract_pca_embeddings(pca_result, tree, components, limit)
+
+            # TODO: Extract actual variance_explained from PCA result
+            json = %{
+              embeddings: embeddings,
+              variance_explained: List.duplicate(0.33, components),
+              total_variance: 0.95,
+              computation_time_ms: Float.round(time_us / 1000.0, 2),
+              parameters: %{
+                n_components: components,
+                n_vectors: min(tree.count, limit),
+                algorithm: "PCA"
+              }
+            } |> Jason.encode!()
+
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, json)
+          rescue
+            e ->
+              error_msg = "PCA failed: #{inspect(e)}"
+              IO.puts(error_msg)
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(500, Jason.encode!(%{error: error_msg}))
+          end
+        else
           conn
           |> put_resp_content_type("application/json")
-          |> send_resp(500, Jason.encode!(%{error: error_msg}))
-      end
-    else
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(400, Jason.encode!(%{error: "Need at least 50 vectors for PCA"}))
+          |> send_resp(400, Jason.encode!(%{error: "Need at least 50 vectors for PCA"}))
+        end
     end
   end
 
   post "/benchmark/run" do
-    {:ok, body, conn} = read_body(conn)
-    params = case Jason.decode(body) do
-      {:ok, p} -> p
-      _ -> %{}
-    end
-
-    benchmark_type = case params["type"] do
-      "flat_vs_ivf" -> :flat_vs_ivf
-      "single_vs_batch" -> :single_vs_batch
-      "cached_vs_uncached" -> :cached_vs_uncached
-      _ -> :flat_vs_ivf  # Default
-    end
-
-    try do
-      case BenchmarkRunner.run_benchmark(benchmark_type, params) do
-        {:ok, results} ->
-          json = Jason.encode!(results)
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(200, json)
-
-        {:error, reason} ->
-          json = Jason.encode!(%{error: reason})
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(400, json)
-      end
-    rescue
-      e ->
-        error_msg = "Benchmark failed: #{Exception.message(e)}"
-        IO.puts(error_msg)
-        json = Jason.encode!(%{error: error_msg})
+    case ensure_allowed(conn, :benchmark) do
+      {:error, conn} ->
         conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(500, json)
-    catch
-      kind, reason ->
-        error_msg = "Benchmark failed: #{kind} #{inspect(reason)}"
-        IO.puts(error_msg)
-        json = Jason.encode!(%{error: error_msg})
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(500, json)
+
+      {:ok, conn} ->
+        {:ok, body, conn} = read_body(conn)
+        params = case Jason.decode(body) do
+          {:ok, p} -> p
+          _ -> %{}
+        end
+
+        benchmark_type = case params["type"] do
+          "flat_vs_ivf" -> :flat_vs_ivf
+          "single_vs_batch" -> :single_vs_batch
+          "cached_vs_uncached" -> :cached_vs_uncached
+          _ -> :flat_vs_ivf  # Default
+        end
+
+        try do
+          case BenchmarkRunner.run_benchmark(benchmark_type, params) do
+            {:ok, results} ->
+              json = Jason.encode!(results)
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(200, json)
+
+            {:error, reason} ->
+              json = Jason.encode!(%{error: reason})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(400, json)
+          end
+        rescue
+          e ->
+            error_msg = "Benchmark failed: #{Exception.message(e)}"
+            IO.puts(error_msg)
+            json = Jason.encode!(%{error: error_msg})
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(500, json)
+        catch
+          kind, reason ->
+            error_msg = "Benchmark failed: #{kind} #{inspect(reason)}"
+            IO.puts(error_msg)
+            json = Jason.encode!(%{error: error_msg})
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(500, json)
+        end
     end
   end
 
@@ -271,43 +295,55 @@ defmodule MerkleDb.Web.Router do
     limit = case Integer.parse(conn.query_params["limit"] || "500") do {n, _} -> min(n, 2000); :error -> 500 end
     threshold = case Float.parse(conn.query_params["threshold"] || "0.30") do {n, _} -> n; :error -> 0.30 end
 
-    if query_text do
-      {time_us, results} = :timer.tc(fn ->
-        q_vec = TextEmbedding.embed(query_text)
-        root = KV.snapshot()
-        Query.execute(root, [:knn, q_vec, limit, threshold])
-      end)
+    case ensure_allowed(conn, :search) do
+      {:error, conn} ->
+        conn
 
-      json_list =
-        results
-        |> Enum.map(fn {key, dist} ->
-           txt = TextStore.get(key) || ""
-           "{\"id\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
-        end)
-        |> Enum.join(",")
+      {:ok, conn} ->
+        if query_text do
+          {time_us, results} = :timer.tc(fn ->
+            q_vec = TextEmbedding.embed(query_text)
+            root = KV.snapshot()
+            Query.execute(root, [:knn, q_vec, limit, threshold])
+          end)
 
-      conn
-      |> put_resp_header("x-search-time-ms", "#{time_us / 1000.0}")
-      |> send_resp(200, "[#{json_list}]")
-    else
-      send_resp(conn, 400, "Missing q")
+          json_list =
+            results
+            |> Enum.map(fn {key, dist} ->
+               txt = TextStore.get(key) || ""
+               "{\"id\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
+            end)
+            |> Enum.join(",")
+
+          conn
+          |> put_resp_header("x-search-time-ms", "#{time_us / 1000.0}")
+          |> send_resp(200, "[#{json_list}]")
+        else
+          send_resp(conn, 400, "Missing q")
+        end
     end
   end
 
   # Text Analytics Endpoints
   get "/analytics/corpus" do
-    case TextAnalytics.analyze_corpus() do
-      {:ok, stats} ->
-        json = Jason.encode!(stats)
+    case ensure_allowed(conn, :analytics) do
+      {:error, conn} ->
         conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, json)
 
-      {:error, reason} ->
-        json = Jason.encode!(%{error: reason})
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(400, json)
+      {:ok, conn} ->
+        case TextAnalytics.analyze_corpus() do
+          {:ok, stats} ->
+            json = Jason.encode!(stats)
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, json)
+
+          {:error, reason} ->
+            json = Jason.encode!(%{error: reason})
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(400, json)
+        end
     end
   end
 
@@ -319,103 +355,133 @@ defmodule MerkleDb.Web.Router do
       :error -> 10
     end
 
-    if word != "" do
-      contexts = TextAnalytics.find_word_contexts(word, limit)
-      json = Jason.encode!(%{word: word, contexts: contexts})
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(200, json)
-    else
-      json = Jason.encode!(%{error: "Missing word parameter"})
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(400, json)
+    case ensure_allowed(conn, :analytics) do
+      {:error, conn} ->
+        conn
+
+      {:ok, conn} ->
+        if word != "" do
+          contexts = TextAnalytics.find_word_contexts(word, limit)
+          json = Jason.encode!(%{word: word, contexts: contexts})
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(200, json)
+        else
+          json = Jason.encode!(%{error: "Missing word parameter"})
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(400, json)
+        end
     end
   end
 
   get "/analytics/clusters" do
-    case TextAnalytics.analyze_clusters() do
-      {:ok, cluster_info} ->
-        json = Jason.encode!(cluster_info)
+    case ensure_allowed(conn, :analytics) do
+      {:error, conn} ->
         conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, json)
 
-      {:error, reason} ->
-        json = Jason.encode!(%{error: reason})
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(400, json)
+      {:ok, conn} ->
+        case TextAnalytics.analyze_clusters() do
+          {:ok, cluster_info} ->
+            json = Jason.encode!(cluster_info)
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, json)
+
+          {:error, reason} ->
+            json = Jason.encode!(%{error: reason})
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(400, json)
+        end
     end
   end
 
   get "/analytics/cluster/:cluster_id" do
     cluster_id = String.to_integer(cluster_id)
 
-    case TextAnalytics.get_cluster_details(cluster_id) do
-      {:ok, details} ->
-        json = Jason.encode!(details)
+    case ensure_allowed(conn, :analytics) do
+      {:error, conn} ->
         conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, json)
 
-      {:error, reason} ->
-        json = Jason.encode!(%{error: reason})
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(404, json)
+      {:ok, conn} ->
+        case TextAnalytics.get_cluster_details(cluster_id) do
+          {:ok, details} ->
+            json = Jason.encode!(details)
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, json)
+
+          {:error, reason} ->
+            json = Jason.encode!(%{error: reason})
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(404, json)
+        end
     end
   end
 
   post "/analytics/build_index" do
-    tree = KV.snapshot()
+    case ensure_allowed(conn, :build_index) do
+      {:error, conn} ->
+        conn
 
-    if tree.count < 10 do
-      json = Jason.encode!(%{error: "Need at least 10 vectors to build IVF index. Please ingest data first."})
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(400, json)
-    else
-      # Build IVF index with k clusters (use sqrt(n) as a good default)
-      k = max(10, trunc(:math.sqrt(tree.count)))
+      {:ok, conn} ->
+        tree = KV.snapshot()
 
-      case IndexBuilder.start_build(k, max_iter: 100, tol: 1.0e-4, seed: 42) do
-        {:ok, _info} ->
-          json = Jason.encode!(%{
-            status: "started",
-            message: "IVF index build started",
-            clusters: k,
-            vectors: tree.count
-          })
-
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(202, json)
-
-        {:error, :already_running} ->
-          json = Jason.encode!(%{error: "Index build already running"})
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(409, json)
-
-        {:error, {:min_vectors, min_vectors}} ->
-          json = Jason.encode!(%{error: "Need at least #{min_vectors} vectors to build IVF index."})
+        if tree.count < 10 do
+          json = Jason.encode!(%{error: "Need at least 10 vectors to build IVF index. Please ingest data first."})
           conn
           |> put_resp_content_type("application/json")
           |> send_resp(400, json)
+        else
+          # Build IVF index with k clusters (use sqrt(n) as a good default)
+          k = max(10, trunc(:math.sqrt(tree.count)))
 
-        {:error, :k_too_large} ->
-          json = Jason.encode!(%{error: "Cluster count exceeds vector count"})
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(400, json)
+          case IndexBuilder.start_build(k, max_iter: 100, tol: 1.0e-4, seed: 42) do
+            {:ok, _info} ->
+              json = Jason.encode!(%{
+                status: "started",
+                message: "IVF index build started",
+                clusters: k,
+                vectors: tree.count
+              })
 
-        {:error, reason} ->
-          json = Jason.encode!(%{error: inspect(reason)})
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(500, json)
-      end
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(202, json)
+
+            {:error, :already_running} ->
+              json = Jason.encode!(%{error: "Index build already running"})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(409, json)
+
+            {:error, :already_indexed} ->
+              json = Jason.encode!(%{error: "Index already built"})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(409, json)
+
+            {:error, {:min_vectors, min_vectors}} ->
+              json = Jason.encode!(%{error: "Need at least #{min_vectors} vectors to build IVF index."})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(400, json)
+
+            {:error, :k_too_large} ->
+              json = Jason.encode!(%{error: "Cluster count exceeds vector count"})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(400, json)
+
+            {:error, reason} ->
+              json = Jason.encode!(%{error: inspect(reason)})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(500, json)
+          end
+        end
     end
   end
 
@@ -437,35 +503,41 @@ defmodule MerkleDb.Web.Router do
       _ -> 10
     end
 
-    case ensure_load_generator_started() do
-      :ok ->
-        try do
-          case LoadGenerator.start_load(target_qps) do
-            {:ok, message} ->
-              json = Jason.encode!(%{status: "started", message: message, target_qps: target_qps})
-              conn
-              |> put_resp_content_type("application/json")
-              |> send_resp(200, json)
+    case ensure_allowed(conn, :load) do
+      {:error, conn} ->
+        conn
 
-            {:error, reason} ->
-              json = Jason.encode!(%{error: reason})
-              conn
-              |> put_resp_content_type("application/json")
-              |> send_resp(400, json)
-          end
-        rescue
-          e ->
-            json = Jason.encode!(%{error: Exception.message(e)})
+      {:ok, conn} ->
+        case ensure_load_generator_started() do
+          :ok ->
+            try do
+              case LoadGenerator.start_load(target_qps) do
+                {:ok, message} ->
+                  json = Jason.encode!(%{status: "started", message: message, target_qps: target_qps})
+                  conn
+                  |> put_resp_content_type("application/json")
+                  |> send_resp(200, json)
+
+                {:error, reason} ->
+                  json = Jason.encode!(%{error: reason})
+                  conn
+                  |> put_resp_content_type("application/json")
+                  |> send_resp(400, json)
+              end
+            rescue
+              e ->
+                json = Jason.encode!(%{error: Exception.message(e)})
+                conn
+                |> put_resp_content_type("application/json")
+                |> send_resp(500, json)
+            end
+
+          {:error, reason} ->
+            json = Jason.encode!(%{error: reason})
             conn
             |> put_resp_content_type("application/json")
-            |> send_resp(500, json)
+            |> send_resp(503, json)
         end
-
-      {:error, reason} ->
-        json = Jason.encode!(%{error: reason})
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(503, json)
     end
   end
 
@@ -626,6 +698,20 @@ defmodule MerkleDb.Web.Router do
         end
       _pid ->
         :ok
+    end
+  end
+
+  defp ensure_allowed(conn, action) do
+    allowed =
+      Bootstrap.status()
+      |> Map.get(:allowed, %{})
+      |> Map.get(action, true)
+
+    if allowed do
+      {:ok, conn}
+    else
+      json = Jason.encode!(%{error: "action_not_allowed", action: action})
+      {:error, conn |> put_resp_content_type("application/json") |> send_resp(409, json)}
     end
   end
 

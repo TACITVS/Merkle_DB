@@ -36,6 +36,7 @@ defmodule MerkleDb.IndexBuilder do
       {:reply, {:error, :already_running}, state}
     else
       tree = KV.snapshot()
+      force = Keyword.get(opts, :force, false)
       min_vectors = Keyword.get(opts, :min_vectors, @min_vectors)
       max_iter = Keyword.get(opts, :max_iter, 100)
       tol = Keyword.get(opts, :tol, 1.0e-4)
@@ -43,6 +44,9 @@ defmodule MerkleDb.IndexBuilder do
       auto_snapshot = Keyword.get(opts, :auto_snapshot, Application.get_env(:merkle_db, :auto_snapshot, true))
 
       cond do
+        tree.centroids != nil and not force ->
+          {:reply, {:error, :already_indexed}, state}
+
         tree.count < min_vectors ->
           {:reply, {:error, {:min_vectors, min_vectors}}, state}
 

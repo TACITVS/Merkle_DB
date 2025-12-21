@@ -28,7 +28,8 @@ defmodule MerkleDb.Bootstrap do
     min_vectors: 10,
     max_iter: 100,
     tol: 1.0e-4,
-    seed: 42
+    seed: 42,
+    force_index: false
   ]
 
   def start_link(_opts \\ []) do
@@ -109,7 +110,9 @@ defmodule MerkleDb.Bootstrap do
     snapshot = Persistence.snapshot_info()
     tree_stats = Keyword.get(opts, :tree_stats) || (KV.snapshot() |> Tree.stats())
     text_count = Keyword.get(opts, :text_count, TextStore.count())
+    ingesting = Application.get_env(:merkle_db, :ingesting, false)
     recommendation = recommend(tree_stats, snapshot, text_count)
+    allowed = allowed_actions(state, tree_stats, text_count, ingesting)
 
     response =
       state
@@ -118,7 +121,9 @@ defmodule MerkleDb.Bootstrap do
         snapshot: snapshot,
         tree: tree_stats,
         text_count: text_count,
-        recommendation: recommendation
+        recommendation: recommendation,
+        allowed: allowed,
+        ingesting: ingesting
       })
       |> normalize()
 
@@ -399,7 +404,8 @@ defmodule MerkleDb.Bootstrap do
                max_iter: Keyword.get(opts, :max_iter, 100),
                tol: Keyword.get(opts, :tol, 1.0e-4),
                seed: Keyword.get(opts, :seed, 42),
-               auto_snapshot: false
+               auto_snapshot: false,
+               force: Keyword.get(opts, :force_index, false)
              ) do
           {:ok, _} ->
             case wait_for_index(parent, Keyword.get(opts, :poll_interval_ms, 500)) do
@@ -492,6 +498,24 @@ defmodule MerkleDb.Bootstrap do
       text_count > 0 -> :rebuild
       true -> :ingest
     end
+  end
+
+  defp allowed_actions(state, tree_stats, text_count, ingesting) do
+    busy = state.status == :running
+    has_vectors = tree_stats.count > 0
+    indexed = tree_stats.has_ivf_index
+
+    %{
+      ingest: !busy and !ingesting and !has_vectors and text_count == 0,
+      search: !busy and !ingesting and has_vectors,
+      build_index: !busy and !ingesting and has_vectors and !indexed,
+      benchmark: !busy and !ingesting and has_vectors,
+      load: !busy and !ingesting and has_vectors,
+      visualize: !busy and !ingesting and has_vectors and tree_stats.count >= 50,
+      analytics: !busy and !ingesting and text_count > 0,
+      save_snapshot: !busy and has_vectors,
+      clear_snapshot: !busy
+    }
   end
 
   defp report(parent, update) do

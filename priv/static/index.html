@@ -383,11 +383,13 @@
                                         <span class="input-group-text bg-dark border-0 text-light"><i class="fa fa-search"></i></span>
                                         <input type="text" class="form-control bg-dark border-0 text-light"
                                                placeholder="Search (e.g. 'faith and hope')..."
-                                               x-model="query" @input.debounce.300ms="search()">
+                                               x-model="query" @input.debounce.300ms="search()"
+                                               :disabled="!(bootstrap.allowed && bootstrap.allowed.search)">
                                     </div>
                                 </div>
                                 <div class="col-md-3">
-                                    <button class="btn btn-primary btn-lg w-100" @click="ingest()" :disabled="ingesting">
+                                    <button class="btn btn-primary btn-lg w-100" @click="ingest()"
+                                            :disabled="ingesting || !(bootstrap.allowed && bootstrap.allowed.ingest)">
                                         <i class="fa fa-database me-2"></i>
                                         <span x-text="ingesting ? 'Ingesting...' : 'Ingest Data'"></span>
                                     </button>
@@ -444,11 +446,13 @@
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <h4><i class="fa fa-cube me-2 text-primary-custom"></i>Vector Space Visualization (PCA)</h4>
                         <div>
-                            <button class="btn btn-sm btn-primary" @click="loadVisualization(3)" :disabled="vizLoading">
+                            <button class="btn btn-sm btn-primary" @click="loadVisualization(3)"
+                                    :disabled="vizLoading || !(bootstrap.allowed && bootstrap.allowed.visualize)">
                                 <i class="fa" :class="vizLoading ? 'fa-spinner fa-spin' : 'fa-cube'"></i>
                                 <span x-text="vizLoading ? ' Loading 3D...' : ' Load 3D'"></span>
                             </button>
-                            <button class="btn btn-sm btn-outline-primary ms-2" @click="loadVisualization(2)" :disabled="vizLoading">
+                            <button class="btn btn-sm btn-outline-primary ms-2" @click="loadVisualization(2)"
+                                    :disabled="vizLoading || !(bootstrap.allowed && bootstrap.allowed.visualize)">
                                 <i class="fa fa-chart-scatter"></i> Load 2D
                             </button>
                         </div>
@@ -481,7 +485,7 @@
                                 <h5 x-text="race.title"></h5>
                                 <button class="btn btn-primary"
                                         @click="runRace(key)"
-                                        :disabled="race.status === 'running'">
+                                        :disabled="race.status === 'running' || !(bootstrap.allowed && bootstrap.allowed.benchmark)">
                                     <i class="fa" :class="race.status === 'running' ? 'fa-spinner fa-spin' : 'fa-play'"></i>
                                     <span x-text="race.status === 'running' ? ' Running...' : ' Run Benchmark'"></span>
                                 </button>
@@ -640,16 +644,20 @@
                                 <button class="btn btn-primary" @click="startBootstrap('auto')" :disabled="bootstrapBusy">
                                     <i class="fa fa-play me-2"></i>Run Auto
                                 </button>
-                                <button class="btn btn-outline-primary" @click="startBootstrap('rebuild')" :disabled="bootstrapBusy">
+                                <button class="btn btn-outline-primary" @click="startBootstrap('rebuild')"
+                                        :disabled="bootstrapBusy || !(bootstrap.text_count > 0)">
                                     <i class="fa fa-sync me-2"></i>Rebuild
                                 </button>
-                                <button class="btn btn-outline-primary" @click="startBootstrap('build_index')" :disabled="bootstrapBusy || summary.count === 0">
+                                <button class="btn btn-outline-primary" @click="startBootstrap('build_index')"
+                                        :disabled="bootstrapBusy || !(bootstrap.allowed && bootstrap.allowed.build_index)">
                                     <i class="fa fa-cogs me-2"></i>Build Index
                                 </button>
-                                <button class="btn btn-outline-info" @click="saveSnapshot()" :disabled="bootstrapBusy || summary.count === 0">
+                                <button class="btn btn-outline-info" @click="saveSnapshot()"
+                                        :disabled="bootstrapBusy || !(bootstrap.allowed && bootstrap.allowed.save_snapshot)">
                                     <i class="fa fa-save me-2"></i>Save Snapshot
                                 </button>
-                                <button class="btn btn-outline-danger" @click="clearSnapshot()" :disabled="bootstrapBusy">
+                                <button class="btn btn-outline-danger" @click="clearSnapshot()"
+                                        :disabled="bootstrapBusy || !(bootstrap.allowed && bootstrap.allowed.clear_snapshot)">
                                     <i class="fa fa-trash me-2"></i>Clear Snapshot
                                 </button>
                                 <button class="btn btn-danger" @click="cancelBootstrap()" :disabled="!bootstrapBusy">
@@ -674,7 +682,8 @@
                                 </div>
                                 <div class="col-md-3">
                                     <label class="form-label">&nbsp;</label>
-                                    <button class="btn btn-success w-100" @click="startLoad()" :disabled="loadStatus.active">
+                                    <button class="btn btn-success w-100" @click="startLoad()"
+                                            :disabled="loadStatus.active || !(bootstrap.allowed && bootstrap.allowed.load)">
                                         <i class="fa fa-play me-2"></i>Start Load
                                     </button>
                                 </div>
@@ -784,7 +793,8 @@
                                         <i class="fa fa-info-circle me-2"></i>
                                         No IVF clustering available. Database is in flat mode.
                                     </div>
-                                    <button class="btn btn-primary w-100 mt-2" @click="buildIVFIndex()" :disabled="indexing">
+                                    <button class="btn btn-primary w-100 mt-2" @click="buildIVFIndex()"
+                                            :disabled="indexing || !(bootstrap.allowed && bootstrap.allowed.build_index)">
                                         <i class="fa fa-cogs me-2"></i>
                                         <span x-text="indexing ? 'Building Index...' : 'Build IVF Index'"></span>
                                     </button>
@@ -999,7 +1009,8 @@
                     processed: 0,
                     total: 0,
                     recommendation: 'none',
-                    snapshot: { exists: false }
+                    snapshot: { exists: false },
+                    allowed: {}
                 },
                 bootstrapAutoStarted: false,
                 bootstrapBusy: false,
@@ -1046,6 +1057,11 @@
 
                 // Search
                 async ingest() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.ingest)) {
+                        alert('Ingest is not available right now.');
+                        return;
+                    }
+
                     this.ingesting = true;
                     await fetch('/ingest', { method: 'POST' });
                     alert('Ingestion started! Vectors are being generated using AVX2 kernels.');
@@ -1053,6 +1069,10 @@
                 },
 
                 async search() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.search)) {
+                        this.results = [];
+                        return;
+                    }
                     if (!this.query) { this.results = []; return; }
                     const start = performance.now();
                     const resp = await fetch(`/search?q=${encodeURIComponent(this.query)}&limit=${this.limit}&threshold=${this.threshold}`);
@@ -1069,6 +1089,11 @@
 
                 // 3D Visualization
                 async loadVisualization(components) {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.visualize)) {
+                        alert('Visualization is not available yet.');
+                        return;
+                    }
+
                     this.vizLoading = true;
 
                     try {
@@ -1274,6 +1299,11 @@
 
                 // Racing
                 async runRace(raceKey) {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.benchmark)) {
+                        alert('Benchmarks are not available yet.');
+                        return;
+                    }
+
                     this.races[raceKey].status = 'running';
                     this.races[raceKey].results = null;
 
@@ -1370,6 +1400,11 @@
 
                 // Load Generator Functions
                 async startLoad() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.load)) {
+                        alert('Load generator is not available yet.');
+                        return;
+                    }
+
                     if (!this.loadQPS || this.loadQPS < 1) {
                         alert('Please enter a valid QPS value (1-100)');
                         return;
@@ -1385,6 +1420,10 @@
                         const result = await this.parseJsonResponse(resp);
 
                         if (!resp.ok) {
+                            if (resp.status === 409 && result.error === 'Index already built') {
+                                alert('IVF index is already built.');
+                                return;
+                            }
                             throw new Error(result.error || `Request failed (${resp.status})`);
                         }
 
@@ -1436,6 +1475,10 @@
 
                 // Text Analytics Functions
                 async loadAnalytics() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.analytics)) {
+                        return;
+                    }
+
                     try {
                         // Load corpus statistics
                         const corpusResp = await fetch('/analytics/corpus');
@@ -1456,6 +1499,11 @@
                 },
 
                 async searchWordContexts() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.analytics)) {
+                        alert('Analytics are not available yet.');
+                        return;
+                    }
+
                     if (!this.wordSearch || this.wordSearch.trim() === '') {
                         alert('Please enter a word to search');
                         return;
@@ -1539,6 +1587,11 @@
                 },
 
                 async buildIVFIndex() {
+                    if (!(this.bootstrap.allowed && this.bootstrap.allowed.build_index)) {
+                        alert('Index build is not available yet.');
+                        return;
+                    }
+
                     this.indexing = true;
 
                     try {
@@ -1645,7 +1698,16 @@
                     const recommendation = this.bootstrap?.recommendation || 'none';
                     const autoModes = ['load_snapshot', 'rebuild', 'build_index', 'save_snapshot'];
                     if (autoModes.includes(recommendation)) {
-                        this.startBootstrap(recommendation);
+                        const allowed = this.bootstrap.allowed || {};
+                        const canRun = {
+                            load_snapshot: true,
+                            rebuild: true,
+                            build_index: !!allowed.build_index,
+                            save_snapshot: !!allowed.save_snapshot
+                        };
+                        if (canRun[recommendation]) {
+                            this.startBootstrap(recommendation);
+                        }
                     }
                 },
 
