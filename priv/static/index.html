@@ -700,9 +700,12 @@
                                 </div>
                                 <div class="col-md-3">
                                     <label class="form-label">&nbsp;</label>
-                                    <button class="btn btn-info w-100" @click="refreshLoadStatus()">
+                                    <button class="btn btn-info w-100" @click="refreshTelemetryStatus()">
                                         <i class="fa fa-sync me-2"></i>Refresh Status
                                     </button>
+                                    <div class="small text-muted mt-2">
+                                        Last refresh: <span x-text="telemetryRefreshAt || 'N/A'"></span>
+                                    </div>
                                 </div>
                             </div>
 
@@ -993,6 +996,7 @@
                     commit: '',
                     build_time: ''
                 },
+                telemetryRefreshAt: null,
                 qpsChart: null,
                 cacheChart: null,
 
@@ -1491,6 +1495,12 @@
                     } catch(e) {
                         console.error('Load status fetch failed:', e);
                     }
+                },
+
+                async refreshTelemetryStatus() {
+                    await this.pollTelemetry();
+                    await this.refreshLoadStatus();
+                    this.telemetryRefreshAt = new Date().toLocaleTimeString();
                 },
 
                 // Text Analytics Functions
