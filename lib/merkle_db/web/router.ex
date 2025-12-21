@@ -308,17 +308,21 @@ defmodule MerkleDb.Web.Router do
             Query.execute(root, [:knn, q_vec, limit, threshold])
           end)
 
-          json_list =
+          payload =
             results
             |> Enum.map(fn {key, dist} ->
-               txt = TextStore.get(key) || ""
-               "{\"id\": \"#{escape(key)}\", \"distance\": #{dist}, \"text\": \"#{escape(txt)}\"}"
+              txt = TextStore.get(key)
+              %{
+                id: key,
+                distance: dist,
+                text: if(txt in [nil, ""], do: "Text not found", else: txt)
+              }
             end)
-            |> Enum.join(",")
 
           conn
           |> put_resp_header("x-search-time-ms", "#{time_us / 1000.0}")
-          |> send_resp(200, "[#{json_list}]")
+          |> put_resp_content_type("application/json")
+          |> send_resp(200, Jason.encode!(payload))
         else
           send_resp(conn, 400, "Missing q")
         end

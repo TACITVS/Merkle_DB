@@ -176,13 +176,13 @@ defmodule MerkleDb.LoadGenerator do
   def handle_info({:tick, interval_ms}, state) do
     # Execute query asynchronously using cached snapshot to avoid KV timeout
     if state.active and interval_ms == state.tick_interval_ms do
-      {new_state, started?} =
+      new_state =
         if state.cached_tree && state.in_flight < state.max_in_flight do
           run_id = state.run_id
           Task.start(fn -> execute_random_query(state.cached_tree, run_id) end)
-          {%{state | in_flight: state.in_flight + 1, queries_sent: state.queries_sent + 1}, true}
+          %{state | in_flight: state.in_flight + 1, queries_sent: state.queries_sent + 1}
         else
-          {state, false}
+          state
         end
 
       # Update current QPS estimate
@@ -192,10 +192,7 @@ defmodule MerkleDb.LoadGenerator do
       tick_ref = Process.send_after(self(), {:tick, interval_ms}, interval_ms)
       updated = %{new_state | current_qps: Float.round(current_qps * 1.0, 2), tick_ref: tick_ref}
 
-      if started? do
-        _ = write_status(updated)
-      end
-
+      _ = write_status(updated)
       {:noreply, updated}
     else
       {:noreply, state}

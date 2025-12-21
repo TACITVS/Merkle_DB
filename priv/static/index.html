@@ -1339,7 +1339,11 @@
                             const indexStatus = this.telemetry.index_build?.status || 'idle';
                             this.indexing = ['preparing', 'queued', 'running', 'finalizing', 'cancelling'].includes(indexStatus);
                             if (data.load_status) {
-                                this.loadStatus = data.load_status;
+                                const nextTs = data.load_status.updated_at_ms || 0;
+                                const currentTs = this.loadStatus?.updated_at_ms || 0;
+                                if (nextTs >= currentTs) {
+                                    this.loadStatus = data.load_status;
+                                }
                             }
                             if (data.bootstrap) {
                                 this.bootstrap = data.bootstrap;
