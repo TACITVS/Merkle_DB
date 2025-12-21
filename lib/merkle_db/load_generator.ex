@@ -9,6 +9,8 @@ defmodule MerkleDb.LoadGenerator do
   @status_table :merkle_load_status
   @status_key :status
   @refresh_interval_ms 5000
+  @min_in_flight 32
+  @in_flight_multiplier 4
 
   @query_pool [
     "faith and hope",
@@ -94,6 +96,9 @@ defmodule MerkleDb.LoadGenerator do
       tick_ref: nil,
       refresh_ref: nil,
       tick_interval_ms: nil,
+      run_id: 0,
+      in_flight: 0,
+      max_in_flight: max(@min_in_flight, System.schedulers_online() * @in_flight_multiplier),
       queries_sent: 0,
       errors: 0,
       start_time: nil,
@@ -122,12 +127,15 @@ defmodule MerkleDb.LoadGenerator do
     # Trigger immediate snapshot refresh (async)
     send(self(), :refresh_snapshot)
 
+    run_id = state.run_id + 1
     new_state = %{state |
       active: true,
       target_qps: target_qps,
       tick_ref: tick_ref,
       refresh_ref: refresh_ref,
       tick_interval_ms: interval,
+      run_id: run_id,
+      in_flight: 0,
       queries_sent: 0,
       errors: 0,
       start_time: System.monotonic_time(:second)
@@ -148,7 +156,10 @@ defmodule MerkleDb.LoadGenerator do
       refresh_ref: nil,
       tick_interval_ms: nil,
       target_qps: 0,
-      cached_tree: nil
+      cached_tree: nil,
+      run_id: state.run_id + 1,
+      start_time: nil,
+      current_qps: 0
     }
 
     _ = write_status(new_state)
@@ -165,11 +176,14 @@ defmodule MerkleDb.LoadGenerator do
   def handle_info({:tick, interval_ms}, state) do
     # Execute query asynchronously using cached snapshot to avoid KV timeout
     if state.active and interval_ms == state.tick_interval_ms do
-      if state.cached_tree do
-        Task.start(fn -> execute_random_query(state.cached_tree) end)
-      end
-
-      new_state = %{state | queries_sent: state.queries_sent + 1}
+      {new_state, started?} =
+        if state.cached_tree && state.in_flight < state.max_in_flight do
+          run_id = state.run_id
+          Task.start(fn -> execute_random_query(state.cached_tree, run_id) end)
+          {%{state | in_flight: state.in_flight + 1, queries_sent: state.queries_sent + 1}, true}
+        else
+          {state, false}
+        end
 
       # Update current QPS estimate
       elapsed = System.monotonic_time(:second) - state.start_time
@@ -177,7 +191,11 @@ defmodule MerkleDb.LoadGenerator do
 
       tick_ref = Process.send_after(self(), {:tick, interval_ms}, interval_ms)
       updated = %{new_state | current_qps: Float.round(current_qps * 1.0, 2), tick_ref: tick_ref}
-      _ = write_status(updated)
+
+      if started? do
+        _ = write_status(updated)
+      end
+
       {:noreply, updated}
     else
       {:noreply, state}
@@ -209,33 +227,54 @@ defmodule MerkleDb.LoadGenerator do
 
   # Private helpers
 
-  defp execute_random_query(tree) do
+  defp execute_random_query(tree, run_id) do
     try do
-      if tree.count > 0 do
-        # Pick random query
-        query_text = Enum.random(@query_pool)
-        query_vec = TextEmbedding.embed(query_text)
+      status = status_snapshot()
 
-        # Execute with appropriate mode based on indexing
-        mode = if tree.centroids, do: [:knn, query_vec, 10, 0.3, :cached],
-                                 else: [:knn, query_vec, 10, 0.3]
-
-        _results = Query.execute(tree, mode)
-        :ok
+      if status.active != true or status.run_id != run_id do
+        :skip
       else
-        :skip  # Skip if no data
+        if tree.count > 0 do
+          # Pick random query
+          query_text = Enum.random(@query_pool)
+          query_vec = TextEmbedding.embed(query_text)
+
+          # Execute with appropriate mode based on indexing
+          mode = if tree.centroids, do: [:knn, query_vec, 10, 0.3, :cached],
+                                   else: [:knn, query_vec, 10, 0.3]
+
+          _results = Query.execute(tree, mode)
+          :ok
+        else
+          :skip  # Skip if no data
+        end
       end
     rescue
       e ->
         IO.puts("Query error: #{inspect(e)}")
-        GenServer.cast(__MODULE__, :increment_error)
+        GenServer.cast(__MODULE__, {:increment_error, run_id})
         :error
+    after
+      GenServer.cast(__MODULE__, {:task_done, run_id})
     end
   end
 
   @impl true
-  def handle_cast(:increment_error, state) do
-    updated = %{state | errors: state.errors + 1}
+  def handle_cast({:increment_error, run_id}, state) do
+    updated =
+      if run_id == state.run_id do
+        %{state | errors: state.errors + 1}
+      else
+        state
+      end
+
+    _ = write_status(updated)
+    {:noreply, updated}
+  end
+
+  @impl true
+  def handle_cast({:task_done, _run_id}, state) do
+    updated = %{state | in_flight: max(state.in_flight - 1, 0)}
     _ = write_status(updated)
     {:noreply, updated}
   end
@@ -255,7 +294,7 @@ defmodule MerkleDb.LoadGenerator do
       end
 
     actual_qps =
-      if elapsed > 0 do
+      if state.active and elapsed > 0 do
         Float.round(state.queries_sent / elapsed, 2)
       else
         0.0
@@ -267,6 +306,9 @@ defmodule MerkleDb.LoadGenerator do
       actual_qps: actual_qps,
       queries_sent: state.queries_sent,
       errors: state.errors,
+      in_flight: state.in_flight,
+      max_in_flight: state.max_in_flight,
+      run_id: state.run_id,
       success_rate:
         if state.queries_sent > 0 do
           Float.round((state.queries_sent - state.errors) / state.queries_sent * 100, 2)
@@ -285,6 +327,9 @@ defmodule MerkleDb.LoadGenerator do
       actual_qps: 0.0,
       queries_sent: 0,
       errors: 0,
+      in_flight: 0,
+      max_in_flight: max(@min_in_flight, System.schedulers_online() * @in_flight_multiplier),
+      run_id: 0,
       success_rate: 100.0,
       elapsed_seconds: 0,
       updated_at_ms: nil

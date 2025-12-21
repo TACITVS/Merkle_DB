@@ -71,10 +71,13 @@ defmodule MerkleDb.TelemetryAggregator do
 
   @impl true
   def handle_call(:get_metrics, _from, state) do
+    current_time = System.monotonic_time(:second)
+    {current_qps, qps_state} = calculate_qps(state, current_time)
+
     metrics =
       try do
         # Extract durations from queue
-        durations_list = :queue.to_list(state.query_durations)
+        durations_list = :queue.to_list(qps_state.query_durations)
 
         # Get tree snapshot for vector count
         tree = safe_kv_snapshot()
@@ -82,9 +85,9 @@ defmodule MerkleDb.TelemetryAggregator do
         # Calculate metrics
         snapshot = %{
           timestamp: System.system_time(:millisecond),
-          query_metrics: build_query_metrics(state, durations_list),
-          cache_metrics: build_cache_metrics(state),
-          system_metrics: build_system_metrics(tree, state),
+          query_metrics: build_query_metrics(qps_state, durations_list, current_qps),
+          cache_metrics: build_cache_metrics(qps_state),
+          system_metrics: build_system_metrics(tree, qps_state),
           index_build: fetch_index_build(),
           bootstrap: fetch_bootstrap(tree),
           load_status: fetch_load_status()
@@ -97,7 +100,7 @@ defmodule MerkleDb.TelemetryAggregator do
           Map.put(cached, :error, Exception.message(e))
       end
 
-    {:reply, metrics, state}
+    {:reply, metrics, qps_state}
   end
 
   @impl true
@@ -149,9 +152,7 @@ defmodule MerkleDb.TelemetryAggregator do
 
   # Private Helpers
 
-  defp build_query_metrics(state, durations_list) do
-    current_qps = calculate_qps(state)
-
+  defp build_query_metrics(state, durations_list, current_qps) do
     if length(durations_list) > 0 do
       sorted_durations = Enum.sort(durations_list)
 
@@ -248,11 +249,17 @@ defmodule MerkleDb.TelemetryAggregator do
     end
   end
 
-  defp calculate_qps(state) do
-    current_time = System.monotonic_time(:second)
+  defp calculate_qps(state, current_time) do
     elapsed = max(current_time - state.last_qps_timestamp, 1)
+    qps = Float.round(state.queries_since_last_check / elapsed, 2)
 
-    Float.round(state.queries_since_last_check / elapsed, 2)
+    updated_state = %{
+      state
+      | last_qps_timestamp: current_time,
+        queries_since_last_check: 0
+    }
+
+    {qps, updated_state}
   end
 
   defp avg([]), do: 0.0
