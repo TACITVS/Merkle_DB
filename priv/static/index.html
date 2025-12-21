@@ -609,6 +609,43 @@
                     </div>
                 </div>
 
+                <!-- FP_ASM Inventory -->
+                <div class="row g-4 mt-2">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <h5 class="mb-3"><i class="fa fa-list me-2 text-primary-custom"></i>FP_ASM Inventory</h5>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Total Functions</span>
+                                <span class="metric-value" x-text="telemetry.fp_inventory?.count || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Generated (UTC)</span>
+                                <span class="metric-value" x-text="telemetry.fp_inventory?.generated_at || 'n/a'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Report Path</span>
+                                <span class="metric-value text-break" x-text="telemetry.fp_inventory?.report_path || 'n/a'"></span>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="small text-muted mb-2">Categories</div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <template x-for="[category, count] in Object.entries(telemetry.fp_inventory?.categories || {})" :key="category">
+                                        <span class="badge bg-secondary" x-text="`${category}: ${count}`"></span>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div class="small text-danger mt-2" x-show="telemetry.fp_inventory?.error">
+                                <span x-text="telemetry.fp_inventory?.error"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Bootstrap Controls -->
                 <div class="row g-4 mt-2">
                     <div class="col-12">
