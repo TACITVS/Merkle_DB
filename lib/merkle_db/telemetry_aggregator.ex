@@ -4,7 +4,7 @@ defmodule MerkleDb.TelemetryAggregator do
   Maintains rolling windows of query performance, cache stats, and system metrics.
   """
   use GenServer
-  alias MerkleDb.{Bootstrap, KV, Progress, Tree, VectorCache}
+  alias MerkleDb.{Bootstrap, KV, LoadGenerator, Progress, Tree, VectorCache}
 
   @window_size 100  # Keep last 100 queries for percentile calculations
   @table_name :telemetry_aggregator
@@ -69,7 +69,8 @@ defmodule MerkleDb.TelemetryAggregator do
       cache_metrics: build_cache_metrics(state),
       system_metrics: build_system_metrics(tree, state),
       index_build: fetch_index_build(),
-      bootstrap: fetch_bootstrap(tree)
+      bootstrap: fetch_bootstrap(tree),
+      load_status: fetch_load_status()
     }
 
     {:reply, metrics, state}
@@ -198,6 +199,24 @@ defmodule MerkleDb.TelemetryAggregator do
     case Process.whereis(Bootstrap) do
       nil -> %{status: :idle}
       _ -> Bootstrap.status(tree_stats: Tree.stats(tree))
+    end
+  end
+
+  defp fetch_load_status do
+    case Process.whereis(LoadGenerator) do
+      nil ->
+        %{
+          active: false,
+          target_qps: 0,
+          actual_qps: 0.0,
+          queries_sent: 0,
+          errors: 0,
+          success_rate: 100.0,
+          elapsed_seconds: 0
+        }
+
+      _ ->
+        LoadGenerator.get_status()
     end
   end
 

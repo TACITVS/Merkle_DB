@@ -1,7 +1,7 @@
 defmodule MerkleDb.Bootstrap do
   use GenServer
 
-  alias MerkleDb.{IndexBuilder, KV, Persistence, Progress, TextEmbedding, TextStore, Tree}
+  alias MerkleDb.{IndexBuilder, KV, LoadGenerator, Persistence, Progress, TextEmbedding, TextStore, Tree}
 
   @default_state %{
     status: :idle,
@@ -142,6 +142,7 @@ defmodule MerkleDb.Bootstrap do
 
   @impl true
   def handle_info({ref, result}, state) when not is_nil(state.task) and ref == state.task.ref do
+    Process.demonitor(ref, [:flush])
     updated =
       case result do
         {:ok, _summary} ->
@@ -199,6 +200,11 @@ defmodule MerkleDb.Bootstrap do
     {:noreply, normalize(updated)}
   end
 
+  @impl true
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    {:noreply, state}
+  end
+
   defp start_job(opts, state) do
     if state.status in [:running, :preparing, :loading, :rebuilding, :building_index, :saving] do
       {:reply, {:error, :already_running}, state}
@@ -234,6 +240,7 @@ defmodule MerkleDb.Bootstrap do
   end
 
   defp run_bootstrap(mode, opts, parent) do
+    LoadGenerator.stop_if_active()
     report(parent, %{phase: :init, message: "starting"})
 
     tree = KV.snapshot()

@@ -1334,11 +1334,15 @@
                     try {
                         const resp = await fetch('/telemetry/metrics');
                         if (resp.ok) {
-                            this.telemetry = await resp.json();
+                            const data = await resp.json();
+                            this.telemetry = data;
                             const indexStatus = this.telemetry.index_build?.status || 'idle';
                             this.indexing = ['preparing', 'queued', 'running', 'finalizing', 'cancelling'].includes(indexStatus);
-                            if (this.telemetry.bootstrap) {
-                                this.bootstrap = this.telemetry.bootstrap;
+                            if (data.load_status) {
+                                this.loadStatus = data.load_status;
+                            }
+                            if (data.bootstrap) {
+                                this.bootstrap = data.bootstrap;
                                 this.bootstrapBusy = this.bootstrap.status === 'running';
                                 this.maybeAutoBootstrap();
                             }

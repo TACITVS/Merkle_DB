@@ -1,7 +1,7 @@
 defmodule MerkleDb.IndexBuilder do
   use GenServer
 
-  alias MerkleDb.{Analytics, FP, KV, Persistence, Progress, Tree}
+  alias MerkleDb.{Analytics, FP, KV, LoadGenerator, Persistence, Progress, Tree}
 
   @poll_interval_ms 250
   @min_vectors 10
@@ -35,6 +35,7 @@ defmodule MerkleDb.IndexBuilder do
     if state.status in [:preparing, :queued, :running, :finalizing, :cancelling] do
       {:reply, {:error, :already_running}, state}
     else
+      LoadGenerator.stop_if_active()
       tree = KV.snapshot()
       force = Keyword.get(opts, :force, false)
       min_vectors = Keyword.get(opts, :min_vectors, @min_vectors)

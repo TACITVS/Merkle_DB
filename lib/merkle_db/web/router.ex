@@ -88,6 +88,7 @@ defmodule MerkleDb.Web.Router do
         else
           path = "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt"
           if File.exists?(path) do
+            LoadGenerator.stop_if_active()
             Application.put_env(:merkle_db, :ingesting, true)
             Task.start(fn ->
               try do
