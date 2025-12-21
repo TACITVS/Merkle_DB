@@ -61,6 +61,15 @@ defmodule MerkleDb.LoadControlTest do
     metrics = MerkleDb.TelemetryAggregator.get_metrics()
     assert is_map(metrics.load_status)
     assert metrics.load_status.active == true
+    assert metrics.stale == false
+  end
+
+  test "telemetry returns stale snapshot when aggregator is down" do
+    ensure_telemetry_started()
+
+    metrics = MerkleDb.TelemetryAggregator.get_metrics()
+    assert metrics.stale == true
+    assert is_map(metrics.load_status)
   end
 
   test "bootstrap start stops the load generator" do

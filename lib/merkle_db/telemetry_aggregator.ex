@@ -8,6 +8,9 @@ defmodule MerkleDb.TelemetryAggregator do
 
   @window_size 100  # Keep last 100 queries for percentile calculations
   @table_name :telemetry_aggregator
+  @metrics_table :telemetry_metrics_snapshot
+  @metrics_key :snapshot
+  @metrics_timeout_ms 200
 
   # Client API
 
@@ -19,7 +22,15 @@ defmodule MerkleDb.TelemetryAggregator do
   Get current metrics snapshot for the dashboard.
   """
   def get_metrics do
-    GenServer.call(__MODULE__, :get_metrics)
+    case Process.whereis(__MODULE__) do
+      nil -> fetch_cached_metrics(true)
+      _ ->
+        try do
+          GenServer.call(__MODULE__, :get_metrics, @metrics_timeout_ms)
+        catch
+          :exit, _ -> fetch_cached_metrics(true)
+        end
+    end
   end
 
   # Server Callbacks
@@ -40,6 +51,9 @@ defmodule MerkleDb.TelemetryAggregator do
 
     # Initialize ETS table for fast concurrent reads
     :ets.new(@table_name, [:set, :public, :named_table, read_concurrency: true])
+    if :ets.whereis(@metrics_table) == :undefined do
+      :ets.new(@metrics_table, [:set, :public, :named_table, read_concurrency: true])
+    end
 
     initial_state = %{
       query_durations: :queue.new(),  # Rolling window of last 100 query durations
@@ -51,27 +65,37 @@ defmodule MerkleDb.TelemetryAggregator do
       start_time: System.system_time(:second)
     }
 
+    _ = cache_metrics(default_metrics(false))
     {:ok, initial_state}
   end
 
   @impl true
   def handle_call(:get_metrics, _from, state) do
-    # Extract durations from queue
-    durations_list = :queue.to_list(state.query_durations)
+    metrics =
+      try do
+        # Extract durations from queue
+        durations_list = :queue.to_list(state.query_durations)
 
-    # Get tree snapshot for vector count
-    tree = KV.snapshot()
+        # Get tree snapshot for vector count
+        tree = safe_kv_snapshot()
 
-    # Calculate metrics
-    metrics = %{
-      timestamp: System.system_time(:millisecond),
-      query_metrics: build_query_metrics(state, durations_list),
-      cache_metrics: build_cache_metrics(state),
-      system_metrics: build_system_metrics(tree, state),
-      index_build: fetch_index_build(),
-      bootstrap: fetch_bootstrap(tree),
-      load_status: fetch_load_status()
-    }
+        # Calculate metrics
+        snapshot = %{
+          timestamp: System.system_time(:millisecond),
+          query_metrics: build_query_metrics(state, durations_list),
+          cache_metrics: build_cache_metrics(state),
+          system_metrics: build_system_metrics(tree, state),
+          index_build: fetch_index_build(),
+          bootstrap: fetch_bootstrap(tree),
+          load_status: fetch_load_status()
+        }
+
+        cache_metrics(snapshot)
+      rescue
+        e ->
+          cached = fetch_cached_metrics(true)
+          Map.put(cached, :error, Exception.message(e))
+      end
 
     {:reply, metrics, state}
   end
@@ -189,34 +213,38 @@ defmodule MerkleDb.TelemetryAggregator do
   end
 
   defp fetch_index_build do
-    case Process.whereis(Progress) do
-      nil -> %{status: :idle}
-      _ -> Progress.get_status()
+    try do
+      case Process.whereis(Progress) do
+        nil -> %{status: :idle}
+        _ -> Progress.get_status()
+      end
+    catch
+      :exit, _ -> %{status: :unknown}
     end
   end
 
   defp fetch_bootstrap(tree) do
-    case Process.whereis(Bootstrap) do
-      nil -> %{status: :idle}
-      _ -> Bootstrap.status(tree_stats: Tree.stats(tree))
+    try do
+      case Process.whereis(Bootstrap) do
+        nil -> %{status: :idle}
+        _ -> Bootstrap.status(tree_stats: Tree.stats(tree))
+      end
+    catch
+      :exit, _ -> %{status: :unknown}
     end
   end
 
   defp fetch_load_status do
-    case Process.whereis(LoadGenerator) do
-      nil ->
-        %{
-          active: false,
-          target_qps: 0,
-          actual_qps: 0.0,
-          queries_sent: 0,
-          errors: 0,
-          success_rate: 100.0,
-          elapsed_seconds: 0
-        }
+    LoadGenerator.status_snapshot()
+  end
 
-      _ ->
-        LoadGenerator.get_status()
+  defp safe_kv_snapshot do
+    try do
+      GenServer.call(KV, :snapshot, 100)
+    rescue
+      _ -> Tree.new()
+    catch
+      :exit, _ -> Tree.new()
     end
   end
 
@@ -239,4 +267,61 @@ defmodule MerkleDb.TelemetryAggregator do
     Float.round(Enum.at(sorted_list, clamped_index), 2)
   end
 
+  defp cache_metrics(metrics) do
+    updated =
+      metrics
+      |> Map.put(:stale, false)
+      |> Map.put(:updated_at_ms, System.monotonic_time(:millisecond))
+
+    :ets.insert(@metrics_table, {@metrics_key, updated})
+    updated
+  end
+
+  defp fetch_cached_metrics(stale?) do
+    case :ets.whereis(@metrics_table) do
+      :undefined -> default_metrics(stale?)
+      _ ->
+        case :ets.lookup(@metrics_table, @metrics_key) do
+          [{@metrics_key, metrics}] -> Map.put(metrics, :stale, stale?)
+          _ -> default_metrics(stale?)
+        end
+    end
+  end
+
+  defp default_metrics(stale?) do
+    %{
+      timestamp: System.system_time(:millisecond),
+      query_metrics: %{
+        total_queries: 0,
+        qps_current: 0.0,
+        avg_latency_ms: 0.0,
+        median_latency_ms: 0.0,
+        p95_latency_ms: 0.0,
+        p99_latency_ms: 0.0,
+        slowest_query_ms: 0.0
+      },
+      cache_metrics: %{
+        hit_rate: 0.0,
+        total_hits: 0,
+        total_misses: 0,
+        size_mb: 0.0,
+        size_entries: 0
+      },
+      system_metrics: %{
+        memory_mb: Float.round(:erlang.memory(:total) / (1024 * 1024), 2),
+        memory_gb: Float.round(:erlang.memory(:total) / (1024 * 1024 * 1024), 3),
+        vector_count: 0,
+        dimensions: 0,
+        indexed: false,
+        index_type: "flat",
+        cluster_count: 0,
+        uptime_seconds: 0
+      },
+      index_build: %{status: :idle},
+      bootstrap: %{status: :idle},
+      load_status: LoadGenerator.status_snapshot(),
+      stale: stale?,
+      updated_at_ms: nil
+    }
+  end
 end
