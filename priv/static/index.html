@@ -3,186 +3,1053 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MerkleDb | High-Performance Vector Analytics</title>
+    <title>MerkleDb | AVX2-Accelerated Vector Analytics Showcase</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <style>
         :root {
             --primary: #6366f1;
+            --secondary: #7c3aed;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
             --dark: #0f172a;
             --light: #f8fafc;
         }
-        body { background-color: var(--light); font-family: 'Inter', sans-serif; color: var(--dark); }
-        .hero { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 4rem 0; margin-bottom: 2rem; }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); transition: transform 0.2s; }
-        .card:hover { transform: translateY(-2px); }
+
+        * { box-sizing: border-box; }
+
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            font-family: 'Inter', sans-serif;
+            color: var(--light);
+            min-height: 100vh;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            padding: 3rem 0 2rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 10s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+
+        .hero-content { position: relative; z-index: 2; }
+
+        .performance-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: rgba(255,255,255,0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            font-size: 0.9rem;
+            margin: 0 0.5rem;
+        }
+
+        /* Tab Navigation */
+        .nav-tabs-custom {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 0.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .nav-tabs-custom .nav-link {
+            color: rgba(255,255,255,0.7);
+            border: none;
+            border-radius: 8px;
+            padding: 0.75rem 1.5rem;
+            margin: 0 0.25rem;
+            transition: all 0.3s;
+        }
+
+        .nav-tabs-custom .nav-link:hover {
+            color: white;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .nav-tabs-custom .nav-link.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Cards */
+        .card {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+            transition: transform 0.2s;
+            color: var(--light);
+        }
+
+        .card:hover { transform: translateY(-4px); }
+
+        .card-glass {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(20px);
+        }
+
         .stat-card { text-align: center; padding: 1.5rem; }
-        .stat-value { font-size: 2rem; font-weight: 800; color: var(--primary); }
-        .search-box { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); margin-top: -4rem; }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .stat-label {
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.6);
+        }
+
+        /* 3D Visualization Container */
+        .viz-container {
+            position: relative;
+            width: 100%;
+            height: 600px;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #0a0e1a;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
+        }
+
+        .viz-controls {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            z-index: 100;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .viz-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        /* Racing Widget */
+        .race-lane {
+            margin-bottom: 1.5rem;
+            padding: 1.5rem;
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
+            border-left: 4px solid var(--primary);
+            transition: all 0.3s ease;
+        }
+
+        .race-lane:hover {
+            background: rgba(255,255,255,0.05);
+            transform: translateX(5px);
+        }
+
+        .race-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+        }
+
+        .race-name { font-weight: 600; font-size: 1.1rem; }
+        .race-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+        }
+
+        .progress {
+            height: 40px;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+        }
+
+        .progress-bar {
+            transition: width 0.5s linear;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .speedup-badge {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border-radius: 16px;
+            box-shadow: 0 0 30px rgba(16, 185, 129, 0.5);
+            animation: glow 2s ease-in-out infinite;
+            margin-top: 1rem;
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.5); }
+            50% { box-shadow: 0 0 40px rgba(16, 185, 129, 0.8); }
+        }
+
+        .speedup-value {
+            font-size: 3rem;
+            font-weight: 900;
+            font-family: 'JetBrains Mono', monospace;
+            color: white;
+        }
+
+        .speedup-label {
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.9);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        /* Telemetry Dashboard */
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            padding: 1.25rem;
+            background: rgba(99, 102, 241, 0.1);
+            border-radius: 12px;
+            border-left: 4px solid var(--primary);
+            margin-bottom: 0.75rem;
+        }
+
+        .metric-label {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.6);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: var(--primary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .chart-container { min-height: 300px; }
+
+        /* Search Results */
         #results { max-height: 600px; overflow-y: auto; }
-        .verse-item { padding: 1rem; border-bottom: 1px solid #e2e8f0; transition: background 0.2s; }
-        .verse-item:hover { background: #f1f5f9; }
-        .progress { height: 10px; border-radius: 5px; }
-        .badge-dist { background: var(--primary); font-size: 0.8rem; }
-        .chart-container { min-height: 350px; }
+        .verse-item {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            transition: background 0.2s;
+        }
+        .verse-item:hover { background: rgba(255,255,255,0.05); }
+
+        .badge-dist {
+            background: var(--primary);
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Buttons */
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            border: none;
+            transition: all 0.3s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        /* Loading Spinner */
+        .spinner-border-sm { width: 1rem; height: 1rem; }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .viz-container { height: 400px; }
+            .speedup-value { font-size: 2rem; }
+            .metric-value { font-size: 1.5rem; }
+            .stat-value { font-size: 1.8rem; }
+        }
+
+        /* Utilities */
+        .text-primary-custom { color: var(--primary); }
+        .text-success-custom { color: var(--success); }
+        .text-warning-custom { color: var(--warning); }
     </style>
 </head>
-<body x-data="app()">
+<body x-data="app()" x-init="init()">
+    <!-- Hero Section -->
     <div class="hero">
-        <div class="container text-center">
-            <h1 class="display-4 fw-bold">MerkleDb Analytics</h1>
-            <p class="lead">Researching the KJV Bible with AVX2-Accelerated Vector Intelligence</p>
+        <div class="container hero-content text-center">
+            <h1 class="display-3 fw-bold mb-3">MerkleDB Analytics</h1>
+            <p class="lead mb-4">High-Performance Vector Intelligence powered by AVX2 Assembly</p>
+            <div class="d-flex justify-content-center flex-wrap">
+                <span class="performance-badge"><i class="fa fa-bolt me-1"></i> 50x Faster Batch Inserts</span>
+                <span class="performance-badge"><i class="fa fa-rocket me-1"></i> 6x IVF Search Speedup</span>
+                <span class="performance-badge"><i class="fa fa-microchip me-1"></i> Zero-Copy NIFs</span>
+            </div>
         </div>
     </div>
 
     <div class="container mb-5">
-        <div class="search-box">
-            <div class="row g-3">
-                <div class="col-md-8">
-                    <div class="input-group input-group-lg">
-                        <span class="input-group-text bg-white border-end-0"><i class="fa fa-search text-muted"></i></span>
-                        <input type="text" class="form-control border-start-0" placeholder="Type a concept (e.g. 'creation of light', 'love and faith')..." 
-                               x-model="query" @input.debounce.300ms="search()">
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-primary btn-lg w-100" @click="ingest()" :disabled="status.status === 'busy'">
-                            <i class="fa fa-database me-2"></i>Ingest Corpus
-                        </button>
-                        <button class="btn btn-outline-secondary btn-lg" @click="toggleSettings = !toggleSettings">
-                            <i class="fa fa-cog"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <div x-show="toggleSettings" x-transition class="mt-3 p-3 bg-light rounded">
-                <h6>Search Parameters</h6>
-                <div class="row">
-                    <div class="col-md-6">
-                        <label class="form-label">Threshold: <span x-text="threshold"></span></label>
-                        <input type="range" class="form-range" min="0" max="1" step="0.05" x-model="threshold">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Limit: <span x-text="limit"></span></label>
-                        <input type="number" class="form-control" x-model="limit">
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Progress Section -->
-        <template x-if="status.status === 'running'">
-            <div class="mt-4 card p-3 border-primary">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="fw-bold">Background Job in Progress...</span>
-                    <span x-text="status.percent + '%'"></span>
-                </div>
-                <div class="progress">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + status.percent + '%'"></div>
-                </div>
-                <div class="mt-2 text-muted small">
-                    Found <span x-text="status.found_count"></span> semantic clusters so far.
-                </div>
-            </div>
-        </template>
-
         <!-- Stats Row -->
-        <div class="row mt-4 g-4">
+        <div class="row g-4 mb-4">
             <div class="col-md-3">
                 <div class="card stat-card">
-                    <div class="text-muted small text-uppercase">Total Vectors</div>
+                    <div class="stat-label">Total Vectors</div>
                     <div class="stat-value" x-text="summary.count || 0"></div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="card stat-card">
-                    <div class="text-muted small text-uppercase">Dimensions</div>
+                    <div class="stat-label">Dimensions</div>
                     <div class="stat-value" x-text="summary.dim || 0"></div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="card stat-card">
-                    <div class="text-muted small text-uppercase">Search Speed</div>
-                    <div class="stat-value"><span x-text="lastSearchTime"></span> <small>ms</small></div>
+                    <div class="stat-label">Index Status</div>
+                    <div class="stat-value text-success-custom" x-text="summary.indexed ? 'IVF' : 'FLAT'"></div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="card stat-card">
-                    <div class="text-muted small text-uppercase">Engine Mode</div>
-                    <div class="stat-value text-success" x-text="summary.indexed ? 'IVF+AVX2' : 'FLAT+AVX2'"></div>
+                    <div class="stat-label">QPS</div>
+                    <div class="stat-value text-warning-custom" x-text="telemetry.query_metrics?.qps_current || 0"></div>
                 </div>
             </div>
         </div>
 
-        <div class="row mt-4">
-            <!-- Search Results -->
-            <div class="col-lg-7">
-                <div class="card p-4">
-                    <h5 class="mb-4"><i class="fa fa-list me-2 text-primary"></i>Semantic Search Results</h5>
-                    <div id="results">
-                        <template x-for="res in results" :key="res.id">
-                            <div class="verse-item">
-                                <div class="d-flex justify-content-between">
-                                    <span class="fw-bold text-primary" x-text="res.id"></span>
-                                    <span class="badge badge-dist" x-text="res.distance.toFixed(4)"></span>
+        <!-- Tab Navigation -->
+        <ul class="nav nav-tabs nav-tabs-custom" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link" :class="activeTab === 'search' && 'active'" @click="activeTab = 'search'">
+                    <i class="fa fa-search me-2"></i>Search
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="activeTab === 'viz' && 'active'" @click="activeTab = 'viz'">
+                    <i class="fa fa-cube me-2"></i>3D Visualization
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="activeTab === 'racing' && 'active'" @click="activeTab = 'racing'">
+                    <i class="fa fa-flag-checkered me-2"></i>Performance Racing
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="activeTab === 'telemetry' && 'active'" @click="activeTab = 'telemetry'">
+                    <i class="fa fa-chart-line me-2"></i>Telemetry
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" :class="activeTab === 'analytics' && 'active'" @click="activeTab = 'analytics'; loadAnalytics()">
+                    <i class="fa fa-chart-bar me-2"></i>Text Analytics
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content mt-4">
+            <!-- SEARCH TAB -->
+            <div x-show="activeTab === 'search'" x-transition>
+                <div class="row g-4">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-6">
+                                    <div class="input-group input-group-lg">
+                                        <span class="input-group-text bg-dark border-0 text-light"><i class="fa fa-search"></i></span>
+                                        <input type="text" class="form-control bg-dark border-0 text-light"
+                                               placeholder="Search (e.g. 'faith and hope')..."
+                                               x-model="query" @input.debounce.300ms="search()">
+                                    </div>
                                 </div>
-                                <p class="mb-0 mt-2 text-dark" x-text="res.text"></p>
+                                <div class="col-md-3">
+                                    <button class="btn btn-primary btn-lg w-100" @click="ingest()" :disabled="ingesting">
+                                        <i class="fa fa-database me-2"></i>
+                                        <span x-text="ingesting ? 'Ingesting...' : 'Ingest Data'"></span>
+                                    </button>
+                                </div>
+                                <div class="col-md-3">
+                                    <button class="btn btn-outline-light btn-lg w-100" @click="toggleSettings = !toggleSettings">
+                                        <i class="fa fa-cog me-2"></i>Settings
+                                    </button>
+                                </div>
                             </div>
-                        </template>
-                        <template x-if="results.length === 0">
-                            <div class="text-center py-5 text-muted">
-                                <i class="fa fa-info-circle fa-2x mb-3"></i>
-                                <p>No results yet. Try searching or ingesting data.</p>
+
+                            <div x-show="toggleSettings" x-transition class="p-3 bg-dark rounded mb-3">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Threshold: <span x-text="threshold"></span></label>
+                                        <input type="range" class="form-range" min="0" max="1" step="0.05" x-model="threshold">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Limit: <span x-text="limit"></span></label>
+                                        <input type="number" class="form-control bg-dark text-light border-0" x-model="limit">
+                                    </div>
+                                </div>
                             </div>
-                        </template>
+
+                            <div class="text-muted small mb-2" x-show="lastSearchTime > 0">
+                                <i class="fa fa-clock me-1"></i> Search completed in <strong x-text="lastSearchTime"></strong> ms
+                            </div>
+
+                            <div id="results">
+                                <template x-for="res in results" :key="res.id">
+                                    <div class="verse-item">
+                                        <div class="d-flex justify-content-between">
+                                            <span class="fw-bold text-primary-custom" x-text="res.id"></span>
+                                            <span class="badge badge-dist" x-text="res.distance.toFixed(4)"></span>
+                                        </div>
+                                        <p class="mb-0 mt-2" x-text="res.text"></p>
+                                    </div>
+                                </template>
+                                <template x-if="results.length === 0">
+                                    <div class="text-center py-5 text-muted">
+                                        <i class="fa fa-info-circle fa-3x mb-3"></i>
+                                        <p>No results yet. Try searching above.</p>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Analytics Dashboard -->
-            <div class="col-lg-5">
-                <div class="card p-4 mb-4">
-                    <h5 class="mb-4"><i class="fa fa-chart-pie me-2 text-primary"></i>Cluster Distribution</h5>
-                    <div id="clusterChart" class="chart-container"></div>
-                </div>
-                
+            <!-- 3D VISUALIZATION TAB -->
+            <div x-show="activeTab === 'viz'" x-transition>
                 <div class="card p-4">
-                    <h5 class="mb-4"><i class="fa fa-wave-square me-2 text-primary"></i>Vector Space Density</h5>
-                    <div id="distChart" class="chart-container"></div>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4><i class="fa fa-cube me-2 text-primary-custom"></i>Vector Space Visualization (PCA)</h4>
+                        <div>
+                            <button class="btn btn-sm btn-primary" @click="loadVisualization(3)" :disabled="vizLoading">
+                                <i class="fa" :class="vizLoading ? 'fa-spinner fa-spin' : 'fa-cube'"></i>
+                                <span x-text="vizLoading ? ' Loading 3D...' : ' Load 3D'"></span>
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary ms-2" @click="loadVisualization(2)" :disabled="vizLoading">
+                                <i class="fa fa-chart-scatter"></i> Load 2D
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="viz-container" id="vectorSpace">
+                        <div class="viz-loading" x-show="!vizReady">
+                            <i class="fa fa-cube fa-3x mb-3 text-primary-custom"></i>
+                            <p>Click "Load 3D" or "Load 2D" to visualize embeddings</p>
+                        </div>
+                    </div>
+
+                    <div class="mt-3 text-muted small" x-show="vizMetadata.computation_time_ms">
+                        <i class="fa fa-info-circle me-1"></i>
+                        PCA computed in <strong x-text="vizMetadata.computation_time_ms"></strong> ms
+                        • <strong x-text="vizMetadata.n_vectors"></strong> vectors
+                        • Variance explained: <strong x-text="(vizMetadata.total_variance * 100).toFixed(1)"></strong>%
+                    </div>
+                </div>
+            </div>
+
+            <!-- PERFORMANCE RACING TAB -->
+            <div x-show="activeTab === 'racing'" x-transition>
+                <div class="card p-4">
+                    <h4 class="mb-4"><i class="fa fa-flag-checkered me-2 text-primary-custom"></i>Performance Benchmarks</h4>
+
+                    <template x-for="(race, key) in races" :key="key">
+                        <div class="mb-5">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h5 x-text="race.title"></h5>
+                                <button class="btn btn-primary"
+                                        @click="runRace(key)"
+                                        :disabled="race.status === 'running'">
+                                    <i class="fa" :class="race.status === 'running' ? 'fa-spinner fa-spin' : 'fa-play'"></i>
+                                    <span x-text="race.status === 'running' ? ' Running...' : ' Run Benchmark'"></span>
+                                </button>
+                            </div>
+
+                            <template x-if="race.results">
+                                <div>
+                                    <template x-for="result in race.results.results" :key="result.name">
+                                        <div class="race-lane">
+                                            <div class="race-header">
+                                                <span class="race-name" x-text="result.name"></span>
+                                                <span class="race-time" x-text="result.duration_ms + ' ms'"></span>
+                                            </div>
+                                            <div class="progress">
+                                                <div class="progress-bar"
+                                                     :class="result.name.includes('IVF') || result.name.includes('Batch') || result.name.includes('Cached') ? 'bg-success' : 'bg-primary'"
+                                                     :style="'width: ' + (result === race.results.results[0] ? 100 : (race.results.results[0].duration_ms / result.duration_ms) * 100) + '%'">
+                                                    <span x-text="result.throughput_qps ? result.throughput_qps.toFixed(1) + ' QPS' : result.throughput_vps ? result.throughput_vps.toLocaleString() + ' V/s' : ''"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+
+                                    <div class="text-center">
+                                        <div class="speedup-badge">
+                                            <div class="speedup-value" x-text="race.results.speedup + 'x'"></div>
+                                            <div class="speedup-label">FASTER</div>
+                                        </div>
+                                        <p class="mt-3 text-muted" x-text="race.results.comparison?.efficiency_gain || race.results.comparison?.cache_advantage"></p>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- TELEMETRY TAB -->
+            <div x-show="activeTab === 'telemetry'" x-transition>
+                <div class="row g-4">
+                    <!-- Query Metrics -->
+                    <div class="col-lg-4">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-search me-2 text-primary-custom"></i>Query Performance</h5>
+
+                            <div id="qpsGauge" class="chart-container"></div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Total Queries</span>
+                                <span class="metric-value" x-text="telemetry.query_metrics?.total_queries || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Avg Latency</span>
+                                <span class="metric-value" x-text="(telemetry.query_metrics?.avg_latency_ms || 0).toFixed(2) + ' ms'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">P95 Latency</span>
+                                <span class="metric-value text-warning-custom" x-text="(telemetry.query_metrics?.p95_latency_ms || 0).toFixed(2) + ' ms'"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cache Metrics -->
+                    <div class="col-lg-4">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-database me-2 text-primary-custom"></i>Cache Performance</h5>
+
+                            <div id="cacheHitRate" class="chart-container"></div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Hit Rate</span>
+                                <span class="metric-value text-success-custom" x-text="((telemetry.cache_metrics?.hit_rate || 0) * 100).toFixed(1) + '%'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Cache Size</span>
+                                <span class="metric-value" x-text="(telemetry.cache_metrics?.size_mb || 0).toFixed(2) + ' MB'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Total Hits / Misses</span>
+                                <span class="metric-value" x-text="(telemetry.cache_metrics?.total_hits || 0) + ' / ' + (telemetry.cache_metrics?.total_misses || 0)"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Metrics -->
+                    <div class="col-lg-4">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-server me-2 text-primary-custom"></i>System Status</h5>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Memory Usage</span>
+                                <span class="metric-value" x-text="(telemetry.system_metrics?.memory_mb || 0).toFixed(2) + ' MB'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Vectors Indexed</span>
+                                <span class="metric-value" x-text="(telemetry.system_metrics?.vector_count || 0).toLocaleString()"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Index Type</span>
+                                <span class="metric-value"
+                                      :class="telemetry.system_metrics?.indexed ? 'text-success-custom' : 'text-warning-custom'"
+                                      x-text="telemetry.system_metrics?.indexed ? 'IVF (' + (telemetry.system_metrics?.cluster_count || 0) + ' clusters)' : 'Flat'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Uptime</span>
+                                <span class="metric-value" x-text="formatUptime(telemetry.system_metrics?.uptime_seconds || 0)"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bootstrap Controls -->
+                <div class="row g-4 mt-2">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <h5 class="mb-3"><i class="fa fa-sitemap me-2 text-primary-custom"></i>Bootstrap &amp; Persistence</h5>
+
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div>
+                                    <span class="badge bg-secondary" x-text="bootstrap.status"></span>
+                                    <span class="ms-2">Phase: <span x-text="bootstrap.phase || 'idle'"></span></span>
+                                </div>
+                                <div class="text-muted small">
+                                    Recommendation: <span x-text="bootstrap.recommendation || 'none'"></span>
+                                </div>
+                            </div>
+
+                            <div class="progress mb-2" style="height: 24px;">
+                                <div class="progress-bar bg-info" role="progressbar"
+                                     :style="`width: ${bootstrap.percent || 0}%`"
+                                     x-text="`${bootstrap.percent || 0}%`"></div>
+                            </div>
+
+                            <div class="small text-muted">
+                                <span>Processed: <span x-text="bootstrap.processed || 0"></span>/<span x-text="bootstrap.total || 0"></span></span>
+                                <span class="ms-2">Elapsed: <span x-text="formatElapsed(bootstrap.elapsed_ms || 0)"></span></span>
+                                <span class="ms-2">Snapshot: <span x-text="bootstrap.snapshot?.exists ? 'present' : 'missing'"></span></span>
+                                <span class="ms-2" x-show="bootstrap.snapshot?.exists">Size: <span x-text="formatBytes(bootstrap.snapshot?.size_bytes || 0)"></span></span>
+                            </div>
+
+                            <div class="small text-muted mt-1" x-show="bootstrap.message">
+                                <span x-text="bootstrap.message"></span>
+                            </div>
+                            <div class="small text-danger mt-1" x-show="bootstrap.error">
+                                <span x-text="bootstrap.error"></span>
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2 mt-3">
+                                <button class="btn btn-primary" @click="startBootstrap('auto')" :disabled="bootstrapBusy">
+                                    <i class="fa fa-play me-2"></i>Run Auto
+                                </button>
+                                <button class="btn btn-outline-primary" @click="startBootstrap('rebuild')" :disabled="bootstrapBusy">
+                                    <i class="fa fa-sync me-2"></i>Rebuild
+                                </button>
+                                <button class="btn btn-outline-primary" @click="startBootstrap('build_index')" :disabled="bootstrapBusy || summary.count === 0">
+                                    <i class="fa fa-cogs me-2"></i>Build Index
+                                </button>
+                                <button class="btn btn-outline-info" @click="saveSnapshot()" :disabled="bootstrapBusy || summary.count === 0">
+                                    <i class="fa fa-save me-2"></i>Save Snapshot
+                                </button>
+                                <button class="btn btn-outline-danger" @click="clearSnapshot()" :disabled="bootstrapBusy">
+                                    <i class="fa fa-trash me-2"></i>Clear Snapshot
+                                </button>
+                                <button class="btn btn-danger" @click="cancelBootstrap()" :disabled="!bootstrapBusy">
+                                    <i class="fa fa-stop me-2"></i>Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Load Generator Controls -->
+                <div class="row g-4 mt-2">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-bolt me-2 text-warning-custom"></i>Load Generator - Stress Testing</h5>
+
+                            <div class="row align-items-center">
+                                <div class="col-md-3">
+                                    <label class="form-label">Target QPS (Queries Per Second)</label>
+                                    <input type="number" class="form-control bg-dark border-0 text-light"
+                                           x-model="loadQPS" min="1" max="100" step="1" placeholder="10">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">&nbsp;</label>
+                                    <button class="btn btn-success w-100" @click="startLoad()" :disabled="loadStatus.active">
+                                        <i class="fa fa-play me-2"></i>Start Load
+                                    </button>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">&nbsp;</label>
+                                    <button class="btn btn-danger w-100" @click="stopLoad()" :disabled="!loadStatus.active">
+                                        <i class="fa fa-stop me-2"></i>Stop Load
+                                    </button>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">&nbsp;</label>
+                                    <button class="btn btn-info w-100" @click="refreshLoadStatus()">
+                                        <i class="fa fa-sync me-2"></i>Refresh Status
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Load Status Display -->
+                            <div class="row g-4 mt-3" x-show="loadStatus.active || loadStatus.queries_sent > 0">
+                                <div class="col-md-3">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Status</div>
+                                        <div class="stat-value" :class="loadStatus.active ? 'text-success-custom' : 'text-muted'"
+                                             x-text="loadStatus.active ? 'Active' : 'Stopped'"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Target QPS</div>
+                                        <div class="stat-value" x-text="loadStatus.target_qps || 0"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Actual QPS</div>
+                                        <div class="stat-value text-primary-custom" x-text="loadStatus.actual_qps || 0"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Queries Sent</div>
+                                        <div class="stat-value" x-text="(loadStatus.queries_sent || 0).toLocaleString()"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Errors</div>
+                                        <div class="stat-value" :class="loadStatus.errors > 0 ? 'text-danger' : 'text-success-custom'"
+                                             x-text="loadStatus.errors || 0"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-1">
+                                    <div class="stat-card">
+                                        <div class="stat-label">Success</div>
+                                        <div class="stat-value text-success-custom" x-text="(loadStatus.success_rate || 100).toFixed(1) + '%'"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ANALYTICS TAB -->
+            <div x-show="activeTab === 'analytics'" x-transition>
+                <div class="row g-4">
+                    <!-- Corpus Statistics -->
+                    <div class="col-lg-6">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-book me-2 text-primary-custom"></i>Corpus Statistics</h5>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Total Words</span>
+                                <span class="metric-value" x-text="(analytics.corpus?.total_words || 0).toLocaleString()"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Unique Words</span>
+                                <span class="metric-value text-primary-custom" x-text="(analytics.corpus?.unique_words || 0).toLocaleString()"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Vocabulary Richness</span>
+                                <span class="metric-value text-success-custom" x-text="(analytics.corpus?.vocabulary_richness || 0).toFixed(4)"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Avg Chunk Length</span>
+                                <span class="metric-value" x-text="(analytics.corpus?.avg_chunk_length || 0).toFixed(1) + ' words'"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Total Chunks</span>
+                                <span class="metric-value" x-text="(analytics.corpus?.total_chunks || 0).toLocaleString()"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Semantic Clusters -->
+                    <div class="col-lg-6">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-project-diagram me-2 text-primary-custom"></i>Semantic Clusters</h5>
+
+                            <template x-if="!analytics.clusters?.indexed">
+                                <div>
+                                    <div class="alert alert-info">
+                                        <i class="fa fa-info-circle me-2"></i>
+                                        No IVF clustering available. Database is in flat mode.
+                                    </div>
+                                    <button class="btn btn-primary w-100 mt-2" @click="buildIVFIndex()" :disabled="indexing">
+                                        <i class="fa fa-cogs me-2"></i>
+                                        <span x-text="indexing ? 'Building Index...' : 'Build IVF Index'"></span>
+                                    </button>
+                                    <p class="text-muted small mt-2 mb-0">
+                                        <i class="fa fa-lightbulb me-1"></i>
+                                        Build IVF index to enable fast approximate search and semantic clustering
+                                    </p>
+                                </div>
+                            </template>
+
+                            <template x-if="analytics.clusters?.indexed">
+                                <div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">Total Clusters</span>
+                                        <span class="metric-value text-primary-custom" x-text="analytics.clusters?.total_clusters || 0"></span>
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <h6 class="text-muted mb-2">Top Clusters by Size:</h6>
+                                        <template x-for="(cluster, idx) in (analytics.clusters?.clusters || []).slice(0, 5)" :key="idx">
+                                            <div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-dark rounded">
+                                                <div>
+                                                    <strong x-text="'Cluster ' + cluster.cluster_id"></strong>
+                                                    <span class="text-muted ms-2" x-text="cluster.size + ' vectors (' + cluster.percentage + '%)'"></span>
+                                                </div>
+                                                <div class="text-success-custom small" x-text="(cluster.common_themes || []).join(', ')"></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+
+                            <template x-if="telemetry.index_build && telemetry.index_build.status !== 'idle'">
+                                <div class="mt-3 p-3 bg-dark rounded">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <strong>Index Build Status</strong>
+                                        <span class="badge bg-secondary" x-text="telemetry.index_build.status"></span>
+                                    </div>
+                                    <div class="progress mb-2" style="height: 24px;">
+                                        <div class="progress-bar bg-success" role="progressbar"
+                                             :style="`width: ${telemetry.index_build.percent || 0}%`"
+                                             x-text="`${telemetry.index_build.percent || 0}%`"></div>
+                                    </div>
+                                    <div class="small text-muted">
+                                        <span>Phase: <span x-text="telemetry.index_build.phase || 'n/a'"></span></span>
+                                        <span class="ms-2">Iter: <span x-text="telemetry.index_build.iter || 0"></span>/<span x-text="telemetry.index_build.max_iter || 0"></span></span>
+                                        <span class="ms-2">Elapsed: <span x-text="formatElapsed(telemetry.index_build.elapsed_ms || 0)"></span></span>
+                                    </div>
+                                    <div class="small text-muted mt-1" x-show="telemetry.index_build.message">
+                                        <span x-text="telemetry.index_build.message"></span>
+                                    </div>
+                                    <div class="small text-danger mt-1" x-show="telemetry.index_build.error">
+                                        <span x-text="telemetry.index_build.error"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Top Words -->
+                <div class="row g-4 mt-2">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-list-ol me-2 text-primary-custom"></i>Top 20 Most Frequent Words</h5>
+                            <div id="wordFreqChart" class="chart-container" style="height: 400px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Word Context Search -->
+                <div class="row g-4 mt-2">
+                    <div class="col-12">
+                        <div class="card p-4">
+                            <h5 class="mb-4"><i class="fa fa-search me-2 text-primary-custom"></i>Word Context Explorer</h5>
+
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-8">
+                                    <div class="input-group">
+                                        <input type="text" class="form-control bg-dark border-0 text-light"
+                                               placeholder="Search for a word (e.g., 'faith', 'love', 'hope')..."
+                                               x-model="wordSearch" @keyup.enter="searchWordContexts()">
+                                        <button class="btn btn-primary" @click="searchWordContexts()">
+                                            <i class="fa fa-search"></i> Search
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <select class="form-select bg-dark border-0 text-light" x-model="contextLimit">
+                                        <option value="5">5 contexts</option>
+                                        <option value="10" selected>10 contexts</option>
+                                        <option value="20">20 contexts</option>
+                                        <option value="50">50 contexts</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div x-show="wordContexts.length > 0" class="mt-3">
+                                <h6 class="text-muted mb-3">Found <span x-text="wordContexts.length"></span> contexts for "<span x-text="lastSearchWord"></span>":</h6>
+                                <div style="max-height: 500px; overflow-y: auto;">
+                                    <template x-for="(ctx, idx) in wordContexts" :key="idx">
+                                        <div class="p-3 mb-2 bg-dark rounded">
+                                            <div class="small text-muted mb-1">Chunk: <span x-text="ctx.chunk_id"></span></div>
+                                            <div class="text-light" x-html="ctx.context"></div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div x-show="wordContexts.length === 0 && lastSearchWord" class="alert alert-info mt-3">
+                                No contexts found for "<span x-text="lastSearchWord"></span>".
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        window.THREE = THREE;
+        window.OrbitControls = OrbitControls;
+    </script>
+
     <script>
         function app() {
             return {
+                // State
+                activeTab: 'search',
                 query: '',
                 threshold: 0.35,
                 limit: 10,
                 results: [],
-                status: { status: 'idle', percent: 0, found_count: 0 },
                 summary: {},
                 lastSearchTime: 0,
                 toggleSettings: false,
-                clusterChart: null,
-                distChart: null,
+                ingesting: false,
 
-                init() {
-                    this.pollStatus();
-                    this.fetchSummary();
-                    this.initCharts();
-                    setInterval(() => this.pollStatus(), 2000);
-                    setInterval(() => this.fetchSummary(), 5000);
+                // Visualization
+                vizLoading: false,
+                vizReady: false,
+                vizMetadata: {},
+                vizScene: null,
+                vizCamera: null,
+                vizRenderer: null,
+                vizControls: null,
+                vizAnimationId: null,
+                vizEmbeddings: [],
+                vizPoints: null,
+                clusterModalVisible: false,
+                selectedCluster: null,
+
+                // Racing
+                races: {
+                    flat_vs_ivf: {
+                        title: 'Race 1: Flat vs IVF Search',
+                        status: 'idle',
+                        results: null
+                    },
+                    single_vs_batch: {
+                        title: 'Race 2: Single vs Batch Insert',
+                        status: 'idle',
+                        results: null
+                    },
+                    cached_vs_uncached: {
+                        title: 'Race 3: Cached vs Uncached Query',
+                        status: 'idle',
+                        results: null
+                    }
                 },
 
+                // Telemetry
+                telemetry: {
+                    query_metrics: {},
+                    cache_metrics: {},
+                    system_metrics: {}
+                },
+                qpsChart: null,
+                cacheChart: null,
+
+                // Load Generator
+                loadQPS: 10,
+                loadStatus: {
+                    active: false,
+                    target_qps: 0,
+                    actual_qps: 0,
+                    queries_sent: 0,
+                    errors: 0,
+                    success_rate: 100,
+                    elapsed_seconds: 0
+                },
+
+                // Bootstrap
+                bootstrap: {
+                    status: 'idle',
+                    phase: 'idle',
+                    percent: 0,
+                    message: '',
+                    error: null,
+                    processed: 0,
+                    total: 0,
+                    recommendation: 'none',
+                    snapshot: { exists: false }
+                },
+                bootstrapAutoStarted: false,
+                bootstrapBusy: false,
+
+                // Text Analytics
+                analytics: {
+                    corpus: null,
+                    clusters: null
+                },
+                wordSearch: '',
+                contextLimit: 10,
+                wordContexts: [],
+                lastSearchWord: '',
+                wordFreqChart: null,
+                indexing: false,
+
+                init() {
+                    this.fetchSummary();
+                    this.pollTelemetry();
+
+                    // Poll telemetry every 2 seconds
+                    setInterval(() => this.pollTelemetry(), 2000);
+
+                    // Poll summary every 5 seconds
+                    setInterval(() => this.fetchSummary(), 5000);
+
+                    // Initialize telemetry charts when tab is activated
+                    this.$watch('activeTab', (newTab) => {
+                        if (newTab === 'telemetry' && !this.qpsChart) {
+                            setTimeout(() => this.initTelemetryCharts(), 100);
+                        }
+                    });
+                },
+
+                async parseJsonResponse(resp) {
+                    const text = await resp.text();
+                    if (!text) return {};
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        return { error: text };
+                    }
+                },
+
+                // Search
                 async ingest() {
+                    this.ingesting = true;
                     await fetch('/ingest', { method: 'POST' });
                     alert('Ingestion started! Vectors are being generated using AVX2 kernels.');
+                    setTimeout(() => { this.ingesting = false; }, 3000);
                 },
 
                 async search() {
@@ -191,60 +1058,824 @@
                     const resp = await fetch(`/search?q=${encodeURIComponent(this.query)}&limit=${this.limit}&threshold=${this.threshold}`);
                     this.results = await resp.json();
                     this.lastSearchTime = (performance.now() - start).toFixed(1);
-                    this.updateDistChart();
-                },
-
-                async pollStatus() {
-                    const resp = await fetch('/job/status');
-                    this.status = await resp.json();
-                    if (this.status.topics.length > 0) {
-                        this.updateClusterChart();
-                    }
                 },
 
                 async fetchSummary() {
                     try {
                         const resp = await fetch('/analytics/summary');
                         if (resp.ok) this.summary = await resp.json();
-                    } catch(e) {}
+                    } catch(e) { console.error('Summary fetch failed:', e); }
                 },
 
-                initCharts() {
-                    const clusterOptions = {
-                        series: [],
-                        chart: { type: 'donut', height: 350 },
-                        labels: [],
-                        responsive: [{ breakpoint: 480, options: { chart: { width: 200 }, legend: { position: 'bottom' } } }]
+                // 3D Visualization
+                async loadVisualization(components) {
+                    this.vizLoading = true;
+
+                    try {
+                        const resp = await fetch(`/analytics/pca_embeddings?components=${components}&limit=500`);
+                        const data = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(data.error || `Request failed (${resp.status})`);
+                        }
+
+                        if (!Array.isArray(data.embeddings)) {
+                            throw new Error('No embeddings returned');
+                        }
+
+                        this.vizMetadata = data.parameters || {};
+                        this.vizMetadata.computation_time_ms = data.computation_time_ms;
+                        this.vizMetadata.total_variance = data.total_variance;
+
+                        if (components === 3) {
+                            this.render3D(data.embeddings);
+                        } else {
+                            this.render2D(data.embeddings);
+                        }
+
+                        this.vizReady = true;
+                    } catch(e) {
+                        console.error('Visualization failed:', e);
+                        this.vizReady = false;
+                        this.vizMetadata = {};
+                        alert('Visualization failed: ' + e.message);
+                    } finally {
+                        this.vizLoading = false;
+                    }
+                },
+
+                render3D(embeddings) {
+                    const container = document.getElementById('vectorSpace');
+                    container.innerHTML = '';
+
+                    // Scene
+                    const scene = new THREE.Scene();
+                    scene.background = new THREE.Color(0x0a0e1a);
+
+                    // Camera
+                    const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+                    camera.position.z = 5;
+
+                    // Renderer
+                    const renderer = new THREE.WebGLRenderer({ antialias: true });
+                    renderer.setSize(container.clientWidth, container.clientHeight);
+                    container.appendChild(renderer.domElement);
+
+                    // Lights
+                    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                    const pointLight = new THREE.PointLight(0xffffff, 1);
+                    pointLight.position.set(5, 5, 5);
+                    scene.add(ambientLight, pointLight);
+
+                    // Controls
+                    const controls = new OrbitControls(camera, renderer.domElement);
+                    controls.enableDamping = true;
+                    controls.dampingFactor = 0.05;
+
+                    // Create point cloud
+                    const geometry = new THREE.BufferGeometry();
+                    const positions = [];
+                    const colors = [];
+
+                    // Color palette for clusters
+                    const clusterColors = [
+                        new THREE.Color(0x6366f1), new THREE.Color(0x7c3aed),
+                        new THREE.Color(0x10b981), new THREE.Color(0xf59e0b),
+                        new THREE.Color(0xef4444), new THREE.Color(0x06b6d4),
+                        new THREE.Color(0xec4899), new THREE.Color(0x8b5cf6),
+                        new THREE.Color(0x14b8a6), new THREE.Color(0xf97316)
+                    ];
+
+                    embeddings.forEach(point => {
+                        positions.push(...point.coords);
+                        const color = clusterColors[point.cluster % clusterColors.length];
+                        colors.push(color.r, color.g, color.b);
+                    });
+
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                    const material = new THREE.PointsMaterial({
+                        size: 0.05,
+                        vertexColors: true,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+
+                    const points = new THREE.Points(geometry, material);
+                    scene.add(points);
+
+                    // Store embeddings for click detection
+                    this.vizEmbeddings = embeddings;
+                    this.vizPoints = points;
+
+                    // Raycaster for click detection
+                    const raycaster = new THREE.Raycaster();
+                    raycaster.params.Points.threshold = 0.1;
+                    const mouse = new THREE.Vector2();
+
+                    // Click handler
+                    const onMouseClick = async (event) => {
+                        const rect = renderer.domElement.getBoundingClientRect();
+                        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+                        raycaster.setFromCamera(mouse, camera);
+                        const intersects = raycaster.intersectObject(points);
+
+                        if (intersects.length > 0) {
+                            const pointIndex = intersects[0].index;
+                            const clickedPoint = embeddings[pointIndex];
+
+                            // Show cluster details
+                            await this.showClusterDetails(clickedPoint.cluster, clickedPoint.id);
+                        }
                     };
-                    this.clusterChart = new ApexCharts(document.querySelector("#clusterChart"), clusterOptions);
-                    this.clusterChart.render();
 
-                    const distOptions = {
-                        series: [{ name: 'Similarity', data: [] }],
-                        chart: { type: 'area', height: 350, animations: { enabled: false } },
-                        dataLabels: { enabled: false },
-                        stroke: { curve: 'smooth' },
-                        xaxis: { categories: [] },
-                        colors: ['#6366f1']
+                    renderer.domElement.addEventListener('click', onMouseClick);
+
+                    // Animation loop
+                    const animate = () => {
+                        this.vizAnimationId = requestAnimationFrame(animate);
+                        controls.update();
+                        renderer.render(scene, camera);
                     };
-                    this.distChart = new ApexCharts(document.querySelector("#distChart"), distOptions);
-                    this.distChart.render();
+                    animate();
+
+                    // Store references
+                    this.vizScene = scene;
+                    this.vizCamera = camera;
+                    this.vizRenderer = renderer;
+                    this.vizControls = controls;
                 },
 
-                updateClusterChart() {
-                    const labels = this.status.topics.map(t => t.label.substring(0, 20));
-                    const counts = this.status.topics.map(t => t.count);
-                    this.clusterChart.updateOptions({ labels: labels, series: counts });
+                async showClusterDetails(clusterId, pointId) {
+                    try {
+                        const response = await fetch(`/analytics/cluster/${clusterId}`);
+                        const details = await response.json();
+
+                        if (response.ok) {
+                            // Show modal with cluster details
+                            this.selectedCluster = details;
+                            this.clusterModalVisible = true;
+                        } else {
+                            alert(`Error: ${details.error || 'Could not load cluster details'}`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to load cluster details:', error);
+                        alert('Failed to load cluster details');
+                    }
                 },
 
-                updateDistChart() {
-                    const data = this.results.map(r => r.distance);
-                    const labels = this.results.map(r => r.id);
-                    this.distChart.updateSeries([{ name: 'Similarity Score', data: data }]);
-                    this.distChart.updateOptions({ xaxis: { categories: labels } });
+                closeClusterModal() {
+                    this.clusterModalVisible = false;
+                    this.selectedCluster = null;
+                },
+
+                render2D(embeddings) {
+                    const container = document.getElementById('vectorSpace');
+                    container.innerHTML = '<div id="scatter2d" style="width: 100%; height: 100%;"></div>';
+
+                    const data = embeddings.map(e => ({
+                        x: e.coords[0],
+                        y: e.coords[1],
+                        z: e.cluster
+                    }));
+
+                    const options = {
+                        series: [{
+                            name: 'Vectors',
+                            data: data
+                        }],
+                        chart: {
+                            type: 'scatter',
+                            height: 600,
+                            background: '#0a0e1a'
+                        },
+                        xaxis: {
+                            title: { text: 'PC1', style: { color: '#fff' } },
+                            labels: { style: { colors: '#fff' } }
+                        },
+                        yaxis: {
+                            title: { text: 'PC2', style: { color: '#fff' } },
+                            labels: { style: { colors: '#fff' } }
+                        },
+                        markers: {
+                            size: 5,
+                            colors: ['#6366f1']
+                        },
+                        theme: {
+                            mode: 'dark'
+                        }
+                    };
+
+                    new ApexCharts(document.querySelector("#scatter2d"), options).render();
+                },
+
+                // Racing
+                async runRace(raceKey) {
+                    this.races[raceKey].status = 'running';
+                    this.races[raceKey].results = null;
+
+                    try {
+                        const resp = await fetch('/benchmark/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ type: raceKey })
+                        });
+
+                        const results = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(results.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.races[raceKey].results = results;
+                        this.races[raceKey].status = 'completed';
+                    } catch(e) {
+                        console.error('Benchmark failed:', e);
+                        alert('Benchmark failed: ' + e.message);
+                        this.races[raceKey].status = 'idle';
+                    }
+                },
+
+                // Telemetry
+                async pollTelemetry() {
+                    try {
+                        const resp = await fetch('/telemetry/metrics');
+                        if (resp.ok) {
+                            this.telemetry = await resp.json();
+                            const indexStatus = this.telemetry.index_build?.status || 'idle';
+                            this.indexing = ['preparing', 'queued', 'running', 'finalizing', 'cancelling'].includes(indexStatus);
+                            if (this.telemetry.bootstrap) {
+                                this.bootstrap = this.telemetry.bootstrap;
+                                this.bootstrapBusy = this.bootstrap.status === 'running';
+                                this.maybeAutoBootstrap();
+                            }
+                            this.updateTelemetryCharts();
+                        }
+                    } catch(e) {
+                        console.error('Telemetry fetch failed:', e);
+                    }
+                },
+
+                initTelemetryCharts() {
+                    // QPS Gauge
+                    const qpsOptions = {
+                        series: [0],
+                        chart: { type: 'radialBar', height: 250 },
+                        plotOptions: {
+                            radialBar: {
+                                hollow: { size: '60%' },
+                                dataLabels: {
+                                    name: { show: true, offsetY: -10, fontSize: '14px', color: '#fff' },
+                                    value: { show: true, fontSize: '24px', fontWeight: 'bold', color: '#6366f1' }
+                                }
+                            }
+                        },
+                        colors: ['#6366f1'],
+                        labels: ['QPS'],
+                        theme: { mode: 'dark' }
+                    };
+                    this.qpsChart = new ApexCharts(document.querySelector("#qpsGauge"), qpsOptions);
+                    this.qpsChart.render();
+
+                    // Cache Hit Rate Donut
+                    const cacheOptions = {
+                        series: [0, 0],
+                        chart: { type: 'donut', height: 250 },
+                        labels: ['Hits', 'Misses'],
+                        colors: ['#10b981', '#ef4444'],
+                        legend: { position: 'bottom', labels: { colors: '#fff' } },
+                        theme: { mode: 'dark' }
+                    };
+                    this.cacheChart = new ApexCharts(document.querySelector("#cacheHitRate"), cacheOptions);
+                    this.cacheChart.render();
+                },
+
+                updateTelemetryCharts() {
+                    if (this.qpsChart) {
+                        const qps = this.telemetry.query_metrics?.qps_current || 0;
+                        const maxQPS = 100;
+                        const percentage = Math.min((qps / maxQPS) * 100, 100);
+                        this.qpsChart.updateSeries([percentage]);
+                    }
+
+                    if (this.cacheChart) {
+                        const hits = this.telemetry.cache_metrics?.total_hits || 0;
+                        const misses = this.telemetry.cache_metrics?.total_misses || 0;
+                        this.cacheChart.updateSeries([hits, misses]);
+                    }
+                },
+
+                // Load Generator Functions
+                async startLoad() {
+                    if (!this.loadQPS || this.loadQPS < 1) {
+                        alert('Please enter a valid QPS value (1-100)');
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch('/load/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ qps: this.loadQPS })
+                        });
+
+                        const result = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.refreshLoadStatus();
+                        // Start polling load status more frequently when active
+                        if (!this.loadStatusInterval) {
+                            this.loadStatusInterval = setInterval(() => {
+                                if (this.loadStatus.active) {
+                                    this.refreshLoadStatus();
+                                }
+                            }, 1000);
+                        }
+                    } catch(e) {
+                        console.error('Load start failed:', e);
+                        alert('Failed to start load: ' + e.message);
+                    }
+                },
+
+                async stopLoad() {
+                    try {
+                        const resp = await fetch('/load/stop', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.refreshLoadStatus();
+                    } catch(e) {
+                        console.error('Load stop failed:', e);
+                        alert('Failed to stop load: ' + e.message);
+                    }
+                },
+
+                async refreshLoadStatus() {
+                    try {
+                        const resp = await fetch('/load/status');
+                        const result = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.loadStatus = result;
+                    } catch(e) {
+                        console.error('Load status fetch failed:', e);
+                    }
+                },
+
+                // Text Analytics Functions
+                async loadAnalytics() {
+                    try {
+                        // Load corpus statistics
+                        const corpusResp = await fetch('/analytics/corpus');
+                        if (corpusResp.ok) {
+                            this.analytics.corpus = await corpusResp.json();
+                            // Initialize word frequency chart
+                            this.$nextTick(() => this.initWordFreqChart());
+                        }
+
+                        // Load cluster information
+                        const clustersResp = await fetch('/analytics/clusters');
+                        if (clustersResp.ok) {
+                            this.analytics.clusters = await clustersResp.json();
+                        }
+                    } catch(e) {
+                        console.error('Analytics load failed:', e);
+                    }
+                },
+
+                async searchWordContexts() {
+                    if (!this.wordSearch || this.wordSearch.trim() === '') {
+                        alert('Please enter a word to search');
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch(`/analytics/word_contexts?word=${encodeURIComponent(this.wordSearch)}&limit=${this.contextLimit}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            this.wordContexts = data.contexts || [];
+                            this.lastSearchWord = this.wordSearch;
+                        } else {
+                            const error = await resp.json();
+                            alert('Search failed: ' + error.error);
+                        }
+                    } catch(e) {
+                        console.error('Word context search failed:', e);
+                        alert('Error searching word contexts');
+                    }
+                },
+
+                initWordFreqChart() {
+                    if (!this.analytics.corpus?.top_words || this.analytics.corpus.top_words.length === 0) {
+                        return;
+                    }
+
+                    const topWords = this.analytics.corpus.top_words.slice(0, 20);
+                    const categories = topWords.map(w => w.word);
+                    const data = topWords.map(w => w.count);
+
+                    const options = {
+                        series: [{
+                            name: 'Frequency',
+                            data: data
+                        }],
+                        chart: {
+                            type: 'bar',
+                            height: 400,
+                            background: 'transparent',
+                            toolbar: { show: false }
+                        },
+                        plotOptions: {
+                            bar: {
+                                horizontal: true,
+                                borderRadius: 4,
+                                dataLabels: { position: 'top' }
+                            }
+                        },
+                        dataLabels: {
+                            enabled: true,
+                            offsetX: 30,
+                            style: {
+                                fontSize: '12px',
+                                colors: ['#fff']
+                            }
+                        },
+                        xaxis: {
+                            categories: categories,
+                            labels: { style: { colors: '#fff' } }
+                        },
+                        yaxis: {
+                            labels: { style: { colors: '#fff' } }
+                        },
+                        colors: ['#6366f1'],
+                        theme: { mode: 'dark' },
+                        grid: {
+                            borderColor: 'rgba(255,255,255,0.1)',
+                            xaxis: { lines: { show: true } }
+                        }
+                    };
+
+                    if (this.wordFreqChart) {
+                        this.wordFreqChart.destroy();
+                    }
+
+                    const chartElement = document.querySelector('#wordFreqChart');
+                    if (chartElement) {
+                        this.wordFreqChart = new ApexCharts(chartElement, options);
+                        this.wordFreqChart.render();
+                    }
+                },
+
+                async buildIVFIndex() {
+                    this.indexing = true;
+
+                    try {
+                        const resp = await fetch('/analytics/build_index', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        alert(`IVF Index build started.\n\nClusters: ${result.clusters}\nVectors: ${result.vectors}`);
+                        this.loadAnalytics();
+                    } catch(e) {
+                        console.error('Index build failed:', e);
+                        this.indexing = false;
+                        alert('Failed to build index: ' + e.message);
+                    }
+                },
+
+                // Bootstrap
+                async startBootstrap(mode = 'auto') {
+                    try {
+                        const resp = await fetch('/bootstrap/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ mode: mode })
+                        });
+
+                        const result = await this.parseJsonResponse(resp);
+
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.bootstrapAutoStarted = true;
+                        this.bootstrapBusy = true;
+                    } catch(e) {
+                        console.error('Bootstrap failed:', e);
+                        alert('Bootstrap failed: ' + e.message);
+                    }
+                },
+
+                async cancelBootstrap() {
+                    try {
+                        const resp = await fetch('/bootstrap/cancel', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                    } catch(e) {
+                        console.error('Bootstrap cancel failed:', e);
+                        alert('Cancel failed: ' + e.message);
+                    }
+                },
+
+                async saveSnapshot() {
+                    try {
+                        const resp = await fetch('/bootstrap/snapshot/save', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                    } catch(e) {
+                        console.error('Snapshot save failed:', e);
+                        alert('Snapshot save failed: ' + e.message);
+                    }
+                },
+
+                async clearSnapshot() {
+                    if (!confirm('Clear the saved snapshot? This does not delete text data.')) {
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch('/bootstrap/snapshot/clear', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                    } catch(e) {
+                        console.error('Snapshot clear failed:', e);
+                        alert('Snapshot clear failed: ' + e.message);
+                    }
+                },
+
+                maybeAutoBootstrap() {
+                    if (this.bootstrapAutoStarted || this.bootstrapBusy) {
+                        return;
+                    }
+
+                    const recommendation = this.bootstrap?.recommendation || 'none';
+                    const autoModes = ['load_snapshot', 'rebuild', 'build_index', 'save_snapshot'];
+                    if (autoModes.includes(recommendation)) {
+                        this.startBootstrap(recommendation);
+                    }
+                },
+
+                // Utilities
+                formatElapsed(ms) {
+                    const totalSeconds = Math.max(Math.floor(ms / 1000), 0);
+                    const minutes = Math.floor(totalSeconds / 60);
+                    const seconds = totalSeconds % 60;
+                    if (minutes > 0) {
+                        return `${minutes}m ${seconds}s`;
+                    }
+                    return `${seconds}s`;
+                },
+
+                formatUptime(seconds) {
+                    const hours = Math.floor(seconds / 3600);
+                    const minutes = Math.floor((seconds % 3600) / 60);
+                    return `${hours}h ${minutes}m`;
+                },
+
+                formatBytes(bytes) {
+                    if (!bytes || bytes <= 0) {
+                        return '0 B';
+                    }
+                    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                    let index = 0;
+                    let value = bytes;
+                    while (value >= 1024 && index < units.length - 1) {
+                        value /= 1024;
+                        index += 1;
+                    }
+                    return `${value.toFixed(1)} ${units[index]}`;
                 }
             }
         }
     </script>
+
+    <!-- Cluster Details Modal -->
+    <div x-show="clusterModalVisible" x-cloak class="modal-backdrop" @click="closeClusterModal()">
+        <div class="modal-content" @click.stop>
+            <div class="modal-header">
+                <h3>Cluster Details</h3>
+                <button @click="closeClusterModal()" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body" x-show="selectedCluster">
+                <div class="cluster-info mb-4">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-label">Cluster ID</div>
+                                <div class="stat-value" x-text="selectedCluster?.cluster_id"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-label">Size</div>
+                                <div class="stat-value" x-text="selectedCluster?.size"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-label">Percentage</div>
+                                <div class="stat-value" x-text="selectedCluster?.percentage + '%'"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-card">
+                                <div class="stat-label">Samples</div>
+                                <div class="stat-value" x-text="selectedCluster?.sample_count"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cluster-themes mb-4">
+                    <h5>Common Themes</h5>
+                    <div class="theme-tags">
+                        <template x-for="theme in selectedCluster?.themes" :key="theme">
+                            <span class="badge bg-primary me-2 mb-2" x-text="theme"></span>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="cluster-samples">
+                    <h5>Sample Texts (from this cluster)</h5>
+                    <div class="sample-list">
+                        <template x-for="(sample, idx) in selectedCluster?.samples" :key="idx">
+                            <div class="sample-item">
+                                <div class="sample-header">
+                                    <strong x-text="sample.chunk_id"></strong>
+                                    <span class="text-muted" x-text="'(Vector #' + sample.vec_index + ')'"></span>
+                                </div>
+                                <div class="sample-text" x-text="sample.text"></div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        [x-cloak] { display: none !important; }
+
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            max-width: 900px;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .modal-header {
+            padding: 24px 32px;
+            border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            color: #e2e8f0;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .btn-close {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 2rem;
+            cursor: pointer;
+            line-height: 1;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .btn-close:hover {
+            background: rgba(99, 102, 241, 0.2);
+            color: #e2e8f0;
+        }
+
+        .modal-body {
+            padding: 32px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .cluster-info .stat-card {
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .cluster-info .stat-label {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .cluster-info .stat-value {
+            color: #e2e8f0;
+            font-size: 1.75rem;
+            font-weight: 700;
+        }
+
+        .cluster-themes h5, .cluster-samples h5 {
+            color: #e2e8f0;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .theme-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .sample-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .sample-item {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .sample-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .sample-header strong {
+            color: #6366f1;
+            font-size: 0.95rem;
+        }
+
+        .sample-text {
+            color: #cbd5e1;
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
+
+        .text-muted {
+            color: #64748b !important;
+            font-size: 0.875rem;
+        }
+    </style>
 </body>
 </html>

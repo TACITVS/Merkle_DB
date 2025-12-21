@@ -13,6 +13,8 @@ defmodule MerkleDb.Application do
     MerkleDb.Telemetry.attach_handlers()
 
     children = [
+      {Task.Supervisor, name: MerkleDb.TaskSupervisor},
+
       # Core storage
       MerkleDb.KV,
       MerkleDb.TextStore,
@@ -20,8 +22,16 @@ defmodule MerkleDb.Application do
       # Performance: ETS-backed cache
       MerkleDb.VectorCache,
 
+      # Telemetry: Real-time metrics aggregation
+      MerkleDb.TelemetryAggregator,
+
+      # Load Testing: Automated stress testing
+      MerkleDb.LoadGenerator,
+
       # Background jobs
+      MerkleDb.Bootstrap,
       MerkleDb.Progress,
+      MerkleDb.IndexBuilder,
       MerkleDb.JobScheduler,
 
       # Web server
@@ -32,6 +42,10 @@ defmodule MerkleDb.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        if Application.get_env(:merkle_db, :auto_bootstrap, true) do
+          _ = MerkleDb.Bootstrap.start(mode: :auto)
+        end
+
         # Log startup info
         IO.puts("""
         ╔════════════════════════════════════════════════════════════╗
