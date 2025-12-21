@@ -309,6 +309,11 @@
                 <span class="performance-badge"><i class="fa fa-rocket me-1"></i> 6x IVF Search Speedup</span>
                 <span class="performance-badge"><i class="fa fa-microchip me-1"></i> Zero-Copy NIFs</span>
             </div>
+            <div class="mt-3 small text-light">
+                Build <span class="fw-bold" x-text="buildInfo.commit || 'unknown'"></span>
+                <span class="mx-2">•</span>
+                <span x-text="buildInfo.build_time || ''"></span>
+            </div>
         </div>
     </div>
 
@@ -984,6 +989,10 @@
                     cache_metrics: {},
                     system_metrics: {}
                 },
+                buildInfo: {
+                    commit: '',
+                    build_time: ''
+                },
                 qpsChart: null,
                 cacheChart: null,
 
@@ -1344,6 +1353,9 @@
                                 if (nextTs >= currentTs) {
                                     this.loadStatus = data.load_status;
                                 }
+                            }
+                            if (data.build_info) {
+                                this.buildInfo = data.build_info;
                             }
                             if (data.bootstrap) {
                                 this.bootstrap = data.bootstrap;

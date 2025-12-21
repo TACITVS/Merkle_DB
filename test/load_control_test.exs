@@ -62,6 +62,8 @@ defmodule MerkleDb.LoadControlTest do
     assert is_map(metrics.load_status)
     assert metrics.load_status.active == true
     assert metrics.stale == false
+    assert is_map(metrics.build_info)
+    assert is_binary(metrics.build_info.commit)
   end
 
   test "stop increments run id and zeroes qps" do
