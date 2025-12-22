@@ -646,6 +646,98 @@
                     </div>
                 </div>
 
+                <!-- FP Dispatcher Controls -->
+                <div class="row g-4 mt-2">
+                    <div class="col-lg-6">
+                        <div class="card p-4">
+                            <h5 class="mb-3"><i class="fa fa-sliders-h me-2 text-primary-custom"></i>FP Dispatcher Status</h5>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Queue Depth</span>
+                                <span class="metric-value" x-text="telemetry.fp_dispatcher?.queue_depth || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">In Flight</span>
+                                <span class="metric-value" x-text="telemetry.fp_dispatcher?.in_flight || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Completed</span>
+                                <span class="metric-value text-success-custom" x-text="telemetry.fp_dispatcher?.total_completed || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Failed</span>
+                                <span class="metric-value text-danger" x-text="telemetry.fp_dispatcher?.total_failed || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Canceled</span>
+                                <span class="metric-value text-warning-custom" x-text="telemetry.fp_dispatcher?.total_canceled || 0"></span>
+                            </div>
+
+                            <div class="metric-item">
+                                <span class="metric-label">Max Concurrency</span>
+                                <span class="metric-value" x-text="telemetry.fp_dispatcher?.max_concurrency || 0"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-lg-6">
+                        <div class="card p-4">
+                            <h5 class="mb-3"><i class="fa fa-play-circle me-2 text-primary-custom"></i>FP Job Controls</h5>
+
+                            <div class="mb-3">
+                                <label class="form-label text-muted">Function</label>
+                                <input type="text" class="form-control bg-dark border-0 text-light"
+                                       placeholder="fp_kmeans_f64" x-model="fpJob.name">
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label text-muted">Args (JSON array)</label>
+                                <textarea class="form-control bg-dark border-0 text-light" rows="3"
+                                          x-model="fpJob.argsJson" placeholder="[data, n, d, k, max_iter, tol, seed]"></textarea>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label text-muted">Mode</label>
+                                <select class="form-select bg-dark border-0 text-light" x-model="fpJob.mode">
+                                    <option value="auto">auto (manifest)</option>
+                                    <option value="sync">sync</option>
+                                    <option value="async">async</option>
+                                    <option value="parallel">parallel</option>
+                                </select>
+                            </div>
+
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <button class="btn btn-primary w-100" @click="submitFpJob()">Submit Job</button>
+                                </div>
+                                <div class="col-md-6">
+                                    <button class="btn btn-danger w-100" @click="stopFpJobs()">Stop All</button>
+                                </div>
+                                <div class="col-md-6">
+                                    <button class="btn btn-secondary w-100" @click="flushFpQueue()">Flush Queue</button>
+                                </div>
+                                <div class="col-md-6">
+                                    <button class="btn btn-warning w-100" @click="cancelFpJob()">Cancel Job</button>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="form-label text-muted">Cancel Job ID</label>
+                                <input type="number" class="form-control bg-dark border-0 text-light"
+                                       placeholder="job id" x-model="fpJob.cancelId">
+                            </div>
+
+                            <div class="small text-muted mt-2" x-show="fpJob.lastMessage">
+                                <span x-text="fpJob.lastMessage"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Bootstrap Controls -->
                 <div class="row g-4 mt-2">
                     <div class="col-12">
@@ -1034,6 +1126,14 @@
                     build_time: ''
                 },
                 telemetryRefreshAt: null,
+                fpJob: {
+                    name: '',
+                    argsJson: '[]',
+                    mode: 'auto',
+                    cancelId: '',
+                    lastJobId: null,
+                    lastMessage: ''
+                },
                 qpsChart: null,
                 cacheChart: null,
 
@@ -1538,6 +1638,108 @@
                     await this.pollTelemetry();
                     await this.refreshLoadStatus();
                     this.telemetryRefreshAt = new Date().toLocaleTimeString();
+                },
+
+                // FP Dispatcher Controls
+                async submitFpJob() {
+                    if (!this.fpJob.name) {
+                        alert('Please enter a function name.');
+                        return;
+                    }
+
+                    let args = [];
+                    try {
+                        args = JSON.parse(this.fpJob.argsJson || '[]');
+                    } catch(e) {
+                        alert('Args must be valid JSON.');
+                        return;
+                    }
+
+                    if (!Array.isArray(args)) {
+                        alert('Args must be a JSON array.');
+                        return;
+                    }
+
+                    const payload = { name: this.fpJob.name, args: args };
+                    if (this.fpJob.mode && this.fpJob.mode !== 'auto') {
+                        payload.mode = this.fpJob.mode;
+                    }
+
+                    try {
+                        const resp = await fetch('/fp/jobs/submit', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.fpJob.lastJobId = result.job_id;
+                        this.fpJob.cancelId = result.job_id;
+                        this.fpJob.lastMessage = result.message || `Queued job ${result.job_id}`;
+                        await this.pollTelemetry();
+                    } catch(e) {
+                        console.error('FP job submit failed:', e);
+                        alert('FP job submit failed: ' + e.message);
+                    }
+                },
+
+                async cancelFpJob() {
+                    const jobId = parseInt(this.fpJob.cancelId, 10);
+                    if (!jobId) {
+                        alert('Enter a valid job id.');
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch('/fp/jobs/cancel', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ job_id: jobId })
+                        });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                        this.fpJob.lastMessage = result.message || `Canceled job ${jobId}`;
+                        await this.pollTelemetry();
+                    } catch(e) {
+                        console.error('FP job cancel failed:', e);
+                        alert('FP job cancel failed: ' + e.message);
+                    }
+                },
+
+                async stopFpJobs() {
+                    try {
+                        const resp = await fetch('/fp/jobs/stop', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                        this.fpJob.lastMessage = result.message || 'Stopped all FP jobs';
+                        await this.pollTelemetry();
+                    } catch(e) {
+                        console.error('FP job stop failed:', e);
+                        alert('FP job stop failed: ' + e.message);
+                    }
+                },
+
+                async flushFpQueue() {
+                    try {
+                        const resp = await fetch('/fp/jobs/flush', { method: 'POST' });
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+                        this.fpJob.lastMessage = result.message || 'Flushed FP job queue';
+                        await this.pollTelemetry();
+                    } catch(e) {
+                        console.error('FP queue flush failed:', e);
+                        alert('FP queue flush failed: ' + e.message);
+                    }
                 },
 
                 // Text Analytics Functions

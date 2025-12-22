@@ -1,6 +1,6 @@
 defmodule MerkleDb.Web.Router do
   use Plug.Router
-  alias MerkleDb.{Bootstrap, KV, Persistence, Query, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder}
+  alias MerkleDb.{Bootstrap, KV, Persistence, Query, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
 
   plug Plug.Static,
     at: "/",
@@ -288,6 +288,138 @@ defmodule MerkleDb.Web.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(200, json)
+  end
+
+  get "/fp/dispatcher/status" do
+    case ensure_fp_dispatcher_started() do
+      :ok ->
+        status = FPDispatcher.status()
+        json = Jason.encode!(status)
+        conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+      {:error, reason} ->
+        json = Jason.encode!(%{error: reason})
+        conn |> put_resp_content_type("application/json") |> send_resp(503, json)
+    end
+  end
+
+  post "/fp/jobs/submit" do
+    {:ok, body, conn} = read_body(conn)
+    params = case Jason.decode(body) do
+      {:ok, p} -> p
+      _ -> %{}
+    end
+
+    name = params["name"]
+    args = params["args"]
+    mode = params["mode"]
+
+    case ensure_fp_dispatcher_started() do
+      :ok ->
+        cond do
+          not is_binary(name) or name == "" ->
+            send_fp_error(conn, 400, "missing_function_name")
+
+          not is_list(args) ->
+            send_fp_error(conn, 400, "args_must_be_array")
+
+          true ->
+            opts =
+              case mode do
+                nil -> []
+                "auto" -> []
+                mode when is_binary(mode) -> [mode: mode]
+                _ -> []
+              end
+
+            try do
+              case FPDispatcher.submit(name, args, opts) do
+                {:ok, job_id} ->
+                  json = Jason.encode!(%{status: "queued", job_id: job_id})
+                  conn |> put_resp_content_type("application/json") |> send_resp(202, json)
+
+                {:error, reason} ->
+                  send_fp_error(conn, 400, reason)
+              end
+            rescue
+              e ->
+                send_fp_error(conn, 400, Exception.message(e))
+            end
+        end
+
+      {:error, reason} ->
+        send_fp_error(conn, 503, reason)
+    end
+  end
+
+  post "/fp/jobs/cancel" do
+    {:ok, body, conn} = read_body(conn)
+    params = case Jason.decode(body) do
+      {:ok, p} -> p
+      _ -> %{}
+    end
+
+    case parse_job_id(params["job_id"]) do
+      {:ok, job_id} ->
+        case FPDispatcher.cancel(job_id) do
+          {:ok, stage} ->
+            json = Jason.encode!(%{status: "canceled", stage: stage, job_id: job_id})
+            conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+          {:error, :already_finished} ->
+            send_fp_error(conn, 409, "already_finished")
+
+          {:error, :unknown_job} ->
+            send_fp_error(conn, 404, "unknown_job")
+
+          {:error, reason} ->
+            send_fp_error(conn, 400, reason)
+        end
+
+      :error ->
+        send_fp_error(conn, 400, "invalid_job_id")
+    end
+  end
+
+  post "/fp/jobs/stop" do
+    case ensure_fp_dispatcher_started() do
+      :ok ->
+        case FPDispatcher.cancel_all() do
+          %{canceled_queue: queued, canceled_running: running} ->
+            json =
+              Jason.encode!(%{
+                status: "stopped",
+                canceled_queue: queued,
+                canceled_running: running,
+                message: "Canceled #{queued} queued and #{running} running jobs"
+              })
+
+            conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+          {:error, reason} ->
+            send_fp_error(conn, 400, reason)
+        end
+
+      {:error, reason} ->
+        send_fp_error(conn, 503, reason)
+    end
+  end
+
+  post "/fp/jobs/flush" do
+    case ensure_fp_dispatcher_started() do
+      :ok ->
+        case FPDispatcher.flush_queue() do
+          flushed when is_integer(flushed) ->
+            json = Jason.encode!(%{status: "flushed", flushed: flushed})
+            conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+          {:error, reason} ->
+            send_fp_error(conn, 400, reason)
+        end
+
+      {:error, reason} ->
+        send_fp_error(conn, 503, reason)
+    end
   end
 
   get "/search" do
@@ -705,6 +837,39 @@ defmodule MerkleDb.Web.Router do
         :ok
     end
   end
+
+  defp ensure_fp_dispatcher_started do
+    case Process.whereis(FPDispatcher) do
+      nil ->
+        case FPDispatcher.start_link(nil) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, reason} -> {:error, inspect(reason)}
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp send_fp_error(conn, status, reason) do
+    json = Jason.encode!(%{error: normalize_error(reason)})
+    conn |> put_resp_content_type("application/json") |> send_resp(status, json)
+  end
+
+  defp normalize_error(reason) when is_binary(reason), do: reason
+  defp normalize_error(reason), do: inspect(reason)
+
+  defp parse_job_id(job_id) when is_integer(job_id), do: {:ok, job_id}
+
+  defp parse_job_id(job_id) when is_binary(job_id) do
+    case Integer.parse(job_id) do
+      {value, _} -> {:ok, value}
+      :error -> :error
+    end
+  end
+
+  defp parse_job_id(_), do: :error
 
   defp ensure_allowed(conn, action) do
     allowed =
