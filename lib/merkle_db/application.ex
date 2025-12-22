@@ -14,6 +14,7 @@ defmodule MerkleDb.Application do
 
     children = [
       {Task.Supervisor, name: MerkleDb.TaskSupervisor},
+      MerkleDb.FPDispatcher,
 
       # Core storage
       MerkleDb.KV,

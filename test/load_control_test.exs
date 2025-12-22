@@ -68,6 +68,8 @@ defmodule MerkleDb.LoadControlTest do
     assert is_integer(metrics.fp_inventory.count)
     assert metrics.fp_inventory.count > 0
     assert is_binary(metrics.fp_inventory.report_path)
+    assert is_map(metrics.fp_dispatcher)
+    assert is_integer(metrics.fp_dispatcher.in_flight)
   end
 
   test "stop increments run id and zeroes qps" do

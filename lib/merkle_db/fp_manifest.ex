@@ -61,6 +61,17 @@ defmodule MerkleDb.FPManifest do
     end
   end
 
+  def lookup(name, arity) when is_atom(name) and is_integer(arity) do
+    name_str = Atom.to_string(name)
+
+    all()
+    |> Enum.find(fn entry -> entry.name == name_str and entry.arity == arity end)
+    |> case do
+      nil -> :error
+      entry -> {:ok, entry}
+    end
+  end
+
   @doc false
   def clear_cache do
     erase_if_present(@entries_cache_key)
