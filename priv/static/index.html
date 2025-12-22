@@ -731,8 +731,18 @@
                                        placeholder="job id" x-model="fpJob.cancelId">
                             </div>
 
+                            <div class="mt-2">
+                                <button class="btn btn-info w-100" @click="checkFpJob()">Check Result</button>
+                            </div>
+
                             <div class="small text-muted mt-2" x-show="fpJob.lastMessage">
                                 <span x-text="fpJob.lastMessage"></span>
+                            </div>
+
+                            <div class="mt-3" x-show="fpJob.lastResult">
+                                <label class="form-label text-muted">Last Result</label>
+                                <pre class="bg-dark border-0 text-light p-2 small" style="max-height: 200px; overflow:auto;"
+                                     x-text="fpJob.lastResult"></pre>
                             </div>
                         </div>
                     </div>
@@ -1132,7 +1142,8 @@
                     mode: 'auto',
                     cancelId: '',
                     lastJobId: null,
-                    lastMessage: ''
+                    lastMessage: '',
+                    lastResult: ''
                 },
                 qpsChart: null,
                 cacheChart: null,
@@ -1709,6 +1720,35 @@
                     } catch(e) {
                         console.error('FP job cancel failed:', e);
                         alert('FP job cancel failed: ' + e.message);
+                    }
+                },
+
+                async checkFpJob() {
+                    const jobId = parseInt(this.fpJob.cancelId, 10);
+                    if (!jobId) {
+                        alert('Enter a valid job id.');
+                        return;
+                    }
+
+                    try {
+                        const resp = await fetch(`/fp/jobs/result?job_id=${encodeURIComponent(jobId)}`);
+                        const result = await this.parseJsonResponse(resp);
+                        if (!resp.ok) {
+                            throw new Error(result.error || `Request failed (${resp.status})`);
+                        }
+
+                        this.fpJob.lastMessage = `Job ${jobId} status: ${result.status}`;
+
+                        if (result.result !== undefined) {
+                            this.fpJob.lastResult = JSON.stringify(result.result, null, 2);
+                        } else {
+                            this.fpJob.lastResult = '';
+                        }
+
+                        await this.pollTelemetry();
+                    } catch(e) {
+                        console.error('FP job result fetch failed:', e);
+                        alert('FP job result fetch failed: ' + e.message);
                     }
                 },
 

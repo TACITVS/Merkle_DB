@@ -303,6 +303,42 @@ defmodule MerkleDb.Web.Router do
     end
   end
 
+  get "/fp/jobs/result" do
+    conn = fetch_query_params(conn)
+
+    case ensure_fp_dispatcher_started() do
+      :ok ->
+        case parse_job_id(conn.query_params["job_id"]) do
+          {:ok, job_id} ->
+            case FPDispatcher.result(job_id) do
+              {:ok, result} ->
+                json = Jason.encode!(%{status: "ok", job_id: job_id, result: normalize_fp_result(result)})
+                conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+              {:error, :queued} ->
+                json = Jason.encode!(%{status: "queued", job_id: job_id})
+                conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+              {:error, :running} ->
+                json = Jason.encode!(%{status: "running", job_id: job_id})
+                conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+              {:error, :unknown_job} ->
+                send_fp_error(conn, 404, "unknown_job")
+
+              {:error, reason} ->
+                send_fp_error(conn, 400, reason)
+            end
+
+          :error ->
+            send_fp_error(conn, 400, "invalid_job_id")
+        end
+
+      {:error, reason} ->
+        send_fp_error(conn, 503, reason)
+    end
+  end
+
   post "/fp/jobs/submit" do
     {:ok, body, conn} = read_body(conn)
     params = case Jason.decode(body) do
@@ -870,6 +906,46 @@ defmodule MerkleDb.Web.Router do
   end
 
   defp parse_job_id(_), do: :error
+
+  defp normalize_fp_result(result) do
+    normalize_fp_value(result)
+  end
+
+  defp normalize_fp_value(value) when is_binary(value) do
+    %{
+      type: "binary",
+      size: byte_size(value),
+      encoding: "base64",
+      value: Base.encode64(value)
+    }
+  end
+
+  defp normalize_fp_value(value) when is_integer(value) or is_float(value) or is_boolean(value), do: value
+  defp normalize_fp_value(value) when is_atom(value), do: Atom.to_string(value)
+
+  defp normalize_fp_value(value) when is_list(value) do
+    Enum.map(value, &normalize_fp_value/1)
+  end
+
+  defp normalize_fp_value(value) when is_map(value) do
+    Map.new(value, fn {k, v} -> {normalize_fp_key(k), normalize_fp_value(v)} end)
+  end
+
+  defp normalize_fp_value(value) when is_tuple(value) do
+    %{
+      type: "tuple",
+      value: value |> Tuple.to_list() |> Enum.map(&normalize_fp_value/1)
+    }
+  end
+
+  defp normalize_fp_value(value) do
+    %{type: "term", value: inspect(value)}
+  end
+
+  defp normalize_fp_key(key) when is_binary(key), do: key
+  defp normalize_fp_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_fp_key(key) when is_integer(key), do: Integer.to_string(key)
+  defp normalize_fp_key(key), do: inspect(key)
 
   defp ensure_allowed(conn, action) do
     allowed =

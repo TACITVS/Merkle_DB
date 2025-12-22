@@ -47,6 +47,12 @@ defmodule MerkleDb.FPDispatcherTest do
     assert results == [{:ok, 3}, {:ok, 7}]
   end
 
+  test "result returns completed value after await" do
+    job_id = MerkleDb.FPDispatcher.async(:add, [5, 6], module: Helpers, mode: "async")
+    assert MerkleDb.FPDispatcher.await(job_id, 1_000) == {:ok, 11}
+    assert MerkleDb.FPDispatcher.result(job_id) == {:ok, 11}
+  end
+
   test "cancel stops queued jobs" do
     max = System.schedulers_online()
     :ok = MerkleDb.FPDispatcher.configure(max_concurrency: 1)
