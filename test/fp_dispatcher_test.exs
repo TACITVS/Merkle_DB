@@ -4,6 +4,10 @@ defmodule MerkleDb.FPDispatcherTest do
   defmodule Helpers do
     def add(a, b), do: a + b
     def fail, do: raise "boom"
+    def sleep(ms) do
+      Process.sleep(ms)
+      :ok
+    end
   end
 
   defp ensure_started(child_spec) do
@@ -27,10 +31,10 @@ defmodule MerkleDb.FPDispatcherTest do
     assert result == 3
   end
 
-  test "async returns a task that can be awaited" do
-    task = MerkleDb.FPDispatcher.async(:add, [2, 3], module: Helpers, mode: "async")
-    assert is_struct(task, Task)
-    assert Task.await(task) == 5
+  test "async returns a job id that can be awaited" do
+    job_id = MerkleDb.FPDispatcher.async(:add, [2, 3], module: Helpers, mode: "async")
+    assert is_integer(job_id)
+    assert MerkleDb.FPDispatcher.await(job_id, 1_000) == {:ok, 5}
   end
 
   test "dispatch_many executes jobs with concurrency" do
@@ -39,8 +43,24 @@ defmodule MerkleDb.FPDispatcherTest do
       %{name: :add, args: [3, 4]}
     ]
 
-    results = MerkleDb.FPDispatcher.dispatch_many(jobs, module: Helpers, mode: "sync", ordered: true)
-    assert Enum.map(results, fn {status, value} -> {status, value} end) == [ok: 3, ok: 7]
+    results = MerkleDb.FPDispatcher.dispatch_many(jobs, module: Helpers, mode: "async")
+    assert results == [{:ok, 3}, {:ok, 7}]
+  end
+
+  test "cancel stops queued jobs" do
+    max = System.schedulers_online()
+    :ok = MerkleDb.FPDispatcher.configure(max_concurrency: 1)
+
+    on_exit(fn ->
+      _ = MerkleDb.FPDispatcher.configure(max_concurrency: max)
+    end)
+
+    job1 = MerkleDb.FPDispatcher.async(:sleep, [200], module: Helpers, mode: "async")
+    job2 = MerkleDb.FPDispatcher.async(:add, [1, 2], module: Helpers, mode: "async")
+
+    assert {:ok, :queued} = MerkleDb.FPDispatcher.cancel(job2)
+    assert MerkleDb.FPDispatcher.await(job2, 1_000) == {:error, {:canceled, :queued}}
+    assert MerkleDb.FPDispatcher.await(job1, 1_000) == {:ok, :ok}
   end
 
   test "status tracks failures" do
