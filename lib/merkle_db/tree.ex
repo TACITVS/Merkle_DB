@@ -9,14 +9,28 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}
+  defstruct columns: nil,
+            keys: %{},
+            count: 0,
+            dim: 0,
+            centroids: nil,
+            clusters: %{},
+            generation: 0
 
   # Memory limits
   @max_tree_size_gb 10
   @max_vector_count 10_000_000
 
   def new do
-    %MerkleDb.Tree{columns: nil, keys: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}}
+    %MerkleDb.Tree{
+      columns: nil,
+      keys: %{},
+      count: 0,
+      dim: 0,
+      centroids: nil,
+      clusters: %{},
+      generation: 0
+    }
   end
 
   @doc """
@@ -60,7 +74,7 @@ defmodule MerkleDb.Tree do
       raise ArgumentError, "Tree memory limit reached: #{estimated_mb}MB > #{@max_tree_size_gb}GB"
     end
 
-    %{tree | columns: new_cols, keys: new_keys, count: tree.count + 1}
+    %{tree | columns: new_cols, keys: new_keys, count: tree.count + 1, generation: tree.generation + 1}
   end
 
   @doc """
@@ -122,7 +136,8 @@ defmodule MerkleDb.Tree do
     new_tree = %{tree |
       columns: List.to_tuple(column_updates),
       keys: new_keys,
-      count: new_count
+      count: new_count,
+      generation: tree.generation + 1
     }
 
     # Check memory
@@ -157,5 +172,19 @@ defmodule MerkleDb.Tree do
       has_ivf_index: tree.centroids != nil,
       cluster_count: map_size(tree.clusters)
     }
+  end
+
+  @doc """
+  Flatten columnar storage into row-major binary (f64).
+  """
+  def flatten(%__MODULE__{columns: nil}), do: <<>>
+  def flatten(%__MODULE__{count: 0}), do: <<>>
+  def flatten(%__MODULE__{count: count, dim: dim} = tree) when count > 0 and dim > 0 do
+    for i <- 0..(count - 1), into: <<>> do
+      for d <- 0..(dim - 1), into: <<>> do
+        col = elem(tree.columns, d)
+        binary_part(col, i * 8, 8)
+      end
+    end
   end
 end

@@ -100,12 +100,31 @@ defmodule MerkleDb.LoadControlTest do
     assert metrics2.query_metrics.qps_current == 0.0
   end
 
-  test "telemetry returns stale snapshot when aggregator is down" do
+  test "telemetry returns stale snapshot when aggregator is unresponsive" do
     ensure_telemetry_started()
 
-    metrics = MerkleDb.TelemetryAggregator.get_metrics()
-    assert metrics.stale == true
-    assert is_map(metrics.load_status)
+    # Suspend the aggregator to make it unresponsive (simulates "down" behavior)
+    case Process.whereis(MerkleDb.TelemetryAggregator) do
+      nil ->
+        # If not running, get_metrics should return stale=true
+        metrics = MerkleDb.TelemetryAggregator.get_metrics()
+        assert metrics.stale == true
+        assert is_map(metrics.load_status)
+
+      pid ->
+        # Suspend the process so GenServer.call will timeout
+        :sys.suspend(pid)
+
+        try do
+          # With process suspended, this should timeout and return stale metrics
+          metrics = MerkleDb.TelemetryAggregator.get_metrics()
+          assert metrics.stale == true
+          assert is_map(metrics.load_status)
+        after
+          # Always resume the process
+          :sys.resume(pid)
+        end
+    end
   end
 
   test "bootstrap start stops the load generator" do

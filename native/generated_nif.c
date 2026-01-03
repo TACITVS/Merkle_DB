@@ -29,6 +29,10 @@ ErlNifResourceType* RES_TYPE_NeuralNetwork;
 ErlNifResourceType* RES_TYPE_PCAModel;
 ErlNifResourceType* RES_TYPE_PCAResult;
 ErlNifResourceType* RES_TYPE_TrainingResult;
+static ERL_NIF_TERM nif_fp_job_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_status(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_cancel(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static void fp_pca_free_result_internal(PCAResult* res) { fp_pca_free_model(&res->model); }
 void dtor_GaussianNBModel(ErlNifEnv* env, void* obj) { GaussianNBModel* res = (GaussianNBModel*)obj; fp_nb_free_gaussian_model(res); }
 
@@ -217,7 +221,7 @@ static ERL_NIF_TERM nif_fp_fold_dotp_i16(ErlNifEnv* env, int argc, const ERL_NIF
     ErlNifBinary bin_b; if (!enif_inspect_binary(env, argv[1], &bin_b)) return enif_make_badarg(env); int16_t* ptr_b = (int16_t*)bin_b.data;
     size_t val_n; if (!enif_get_uint64(env, argv[2], (ErlNifUInt64*)&val_n)) return enif_make_badarg(env);
     int16_t res = fp_fold_dotp_i16(ptr_a, ptr_b, val_n);
-    return enif_make_int(env, 0);
+    return enif_make_int(env, res);
 }
 
 static ERL_NIF_TERM nif_fp_fold_dotp_i32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
@@ -241,7 +245,7 @@ static ERL_NIF_TERM nif_fp_fold_dotp_i8(ErlNifEnv* env, int argc, const ERL_NIF_
     ErlNifBinary bin_b; if (!enif_inspect_binary(env, argv[1], &bin_b)) return enif_make_badarg(env); int8_t* ptr_b = (int8_t*)bin_b.data;
     size_t val_n; if (!enif_get_uint64(env, argv[2], (ErlNifUInt64*)&val_n)) return enif_make_badarg(env);
     int8_t res = fp_fold_dotp_i8(ptr_a, ptr_b, val_n);
-    return enif_make_int(env, 0);
+    return enif_make_int(env, res);
 }
 
 static ERL_NIF_TERM nif_fp_fold_dotp_u16(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
@@ -1784,7 +1788,11 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"get_PCAModel_n_components", 2, nif_get_PCAModel_n_components},
     {"get_PCAModel_eigenvalues", 2, nif_get_PCAModel_eigenvalues},
     {"get_PCAModel_total_variance", 2, nif_get_PCAModel_total_variance},
-    {"get_PCAResult_converged", 2, nif_get_PCAResult_converged} 
+    {"get_PCAResult_converged", 2, nif_get_PCAResult_converged},
+    {"fp_job_start", 3, nif_fp_job_start},
+    {"fp_job_status", 1, nif_fp_job_status},
+    {"fp_job_result", 1, nif_fp_job_result},
+    {"fp_job_cancel", 1, nif_fp_job_cancel} 
 }; 
 static int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { RES_TYPE_GaussianNBModel = enif_open_resource_type(env, NULL, "GaussianNBModel", dtor_GaussianNBModel, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);
     RES_TYPE_KMeansResult = enif_open_resource_type(env, NULL, "KMeansResult", dtor_KMeansResult, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);

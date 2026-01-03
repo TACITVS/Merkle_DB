@@ -14,11 +14,14 @@ defmodule MerkleDb.Application do
 
     children = [
       {Task.Supervisor, name: MerkleDb.TaskSupervisor},
+      {Registry, keys: :unique, name: MerkleDb.StorageRegistry},
       MerkleDb.FPDispatcher,
 
       # Core storage
       MerkleDb.KV,
       MerkleDb.TextStore,
+      MerkleDb.PayloadStore,
+      MerkleDb.Replication,
 
       # Performance: ETS-backed cache
       MerkleDb.VectorCache,

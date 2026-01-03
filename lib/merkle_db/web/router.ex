@@ -1,6 +1,6 @@
 defmodule MerkleDb.Web.Router do
   use Plug.Router
-  alias MerkleDb.{Bootstrap, KV, Persistence, Query, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
+  alias MerkleDb.{Bootstrap, Filter, KV, PayloadStore, Persistence, Query, Replication, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
 
   plug Plug.Static,
     at: "/",
@@ -470,27 +470,59 @@ defmodule MerkleDb.Web.Router do
 
       {:ok, conn} ->
         if query_text do
-          {time_us, results} = :timer.tc(fn ->
-            q_vec = TextEmbedding.embed(query_text)
-            root = KV.snapshot()
-            Query.execute(root, [:knn, q_vec, limit, threshold])
-          end)
+          # Parse optional filter parameter
+          filter_param = conn.query_params["filter"]
+          filter_result = Filter.parse_query_param(filter_param)
 
-          payload =
-            results
-            |> Enum.map(fn {key, dist} ->
-              txt = TextStore.get(key)
-              %{
-                id: key,
-                distance: dist,
-                text: if(txt in [nil, ""], do: "Text not found", else: txt)
+          case filter_result do
+            {:error, reason} ->
+              json = Jason.encode!(%{error: "Invalid filter: #{reason}"})
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(400, json)
+
+            {:ok, filter} ->
+              tree = KV.snapshot()
+              is_indexed = tree.centroids != nil
+
+              {time_us, results} = :timer.tc(fn ->
+                q_vec = TextEmbedding.embed(query_text)
+
+                # Use filtered query if filter is provided
+                if filter == [] do
+                  Query.execute(tree, [:knn, q_vec, limit, threshold])
+                else
+                  Query.execute(tree, [:knn, q_vec, limit, threshold, filter])
+                end
+              end)
+
+              hits =
+                results
+                |> Enum.map(fn {key, dist} ->
+                  txt = TextStore.get(key)
+                  payload = PayloadStore.get(key)
+                  %{
+                    id: key,
+                    distance: dist,
+                    text: if(txt in [nil, ""], do: "Text not found", else: txt),
+                    payload: payload
+                  }
+                end)
+
+              # Include indexed and filtered flags in response
+              response = %{
+                results: hits,
+                indexed: is_indexed,
+                filtered: filter != [],
+                count: length(hits),
+                search_time_ms: time_us / 1000.0
               }
-            end)
 
-          conn
-          |> put_resp_header("x-search-time-ms", "#{time_us / 1000.0}")
-          |> put_resp_content_type("application/json")
-          |> send_resp(200, Jason.encode!(payload))
+              conn
+              |> put_resp_header("x-search-time-ms", "#{time_us / 1000.0}")
+              |> put_resp_content_type("application/json")
+              |> send_resp(200, Jason.encode!(response))
+          end
         else
           send_resp(conn, 400, "Missing q")
         end
@@ -595,6 +627,14 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/analytics/build_index" do
+    {:ok, body, conn} = read_body(conn)
+    params = case Jason.decode(body) do
+      {:ok, p} -> p
+      _ -> %{}
+    end
+
+    force = params["force"] == true
+
     case ensure_allowed(conn, :build_index) do
       {:error, conn} ->
         conn
@@ -609,9 +649,9 @@ defmodule MerkleDb.Web.Router do
           |> send_resp(400, json)
         else
           # Build IVF index with k clusters (use sqrt(n) as a good default)
-          k = max(10, trunc(:math.sqrt(tree.count)))
+          k = params["k"] || max(10, trunc(:math.sqrt(tree.count)))
 
-          case IndexBuilder.start_build(k, max_iter: 100, tol: 1.0e-4, seed: 42) do
+          case IndexBuilder.start_build(k, max_iter: 100, tol: 1.0e-4, seed: 42, force: force) do
             {:ok, _info} ->
               json = Jason.encode!(%{
                 status: "started",
@@ -631,7 +671,7 @@ defmodule MerkleDb.Web.Router do
               |> send_resp(409, json)
 
             {:error, :already_indexed} ->
-              json = Jason.encode!(%{error: "Index already built"})
+              json = Jason.encode!(%{error: "Index already built. Use {\"force\": true} to rebuild."})
               conn
               |> put_resp_content_type("application/json")
               |> send_resp(409, json)
@@ -779,6 +819,115 @@ defmodule MerkleDb.Web.Router do
       {:error, reason} ->
         json = Jason.encode!(%{error: inspect(reason)})
         conn |> put_resp_content_type("application/json") |> send_resp(409, json)
+    end
+  end
+
+  # --- REPLICATION ENDPOINTS ---
+
+  get "/replication/status" do
+    status = Replication.status()
+    json = Jason.encode!(status)
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+  end
+
+  get "/replication/deltas" do
+    conn = fetch_query_params(conn)
+    since = case Integer.parse(conn.query_params["since"] || "0") do
+      {n, _} -> n
+      :error -> 0
+    end
+    limit = case Integer.parse(conn.query_params["limit"] || "1000") do
+      {n, _} -> min(n, 10000)
+      :error -> 1000
+    end
+
+    {:ok, ops} = Replication.get_deltas(since: since, limit: limit)
+
+    # Convert operations to JSON-serializable maps
+    json_ops = Enum.map(ops, fn op ->
+      %{
+        seq: op.seq,
+        op: op.op,
+        key: op.key,
+        data: serialize_operation_data(op.data),
+        timestamp: op.timestamp
+      }
+    end)
+
+    json = Jason.encode!(%{
+      current_seq: Replication.current_seq(),
+      operations: json_ops,
+      count: length(json_ops)
+    })
+
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+  end
+
+  post "/replication/apply" do
+    {:ok, body, conn} = read_body(conn)
+
+    case Jason.decode(body) do
+      {:ok, %{"operations" => operations}} when is_list(operations) ->
+        case Replication.apply_operations(operations) do
+          {:ok, count} ->
+            json = Jason.encode!(%{status: "applied", count: count})
+            conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+          {:error, reason} ->
+            json = Jason.encode!(%{error: inspect(reason)})
+            conn |> put_resp_content_type("application/json") |> send_resp(400, json)
+        end
+
+      {:ok, _} ->
+        json = Jason.encode!(%{error: "Missing operations array"})
+        conn |> put_resp_content_type("application/json") |> send_resp(400, json)
+
+      {:error, _} ->
+        json = Jason.encode!(%{error: "Invalid JSON"})
+        conn |> put_resp_content_type("application/json") |> send_resp(400, json)
+    end
+  end
+
+  get "/replication/snapshot" do
+    case Replication.export_snapshot() do
+      {:ok, snapshot} ->
+        # Convert to JSON-safe format
+        json_snapshot = %{
+          type: snapshot.type,
+          timestamp: snapshot.timestamp,
+          seq: snapshot.seq,
+          tree_stats: snapshot.tree_stats,
+          vector_count: length(snapshot.vectors || []),
+          payload_count: safe_map_size(snapshot.payloads),
+          text_count: safe_map_size(snapshot.texts)
+        }
+
+        json = Jason.encode!(json_snapshot)
+        conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+      {:error, reason} ->
+        json = Jason.encode!(%{error: inspect(reason)})
+        conn |> put_resp_content_type("application/json") |> send_resp(500, json)
+    end
+  end
+
+  post "/replication/compact" do
+    {:ok, body, conn} = read_body(conn)
+    params = case Jason.decode(body) do
+      {:ok, p} -> p
+      _ -> %{}
+    end
+
+    keep_last = params["keep_last"] || 10000
+
+    case Replication.compact(keep_last: keep_last) do
+      {:ok, deleted} ->
+        json = Jason.encode!(%{status: "compacted", deleted: deleted, keep_last: keep_last})
+        conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+
+      {:error, reason} ->
+        json = Jason.encode!(%{error: inspect(reason)})
+        conn |> put_resp_content_type("application/json") |> send_resp(500, json)
     end
   end
 
@@ -981,6 +1130,31 @@ defmodule MerkleDb.Web.Router do
     |> String.replace("\r", "")
     |> String.replace("\t", " ")
   end
+
+  defp serialize_operation_data(nil), do: nil
+  defp serialize_operation_data(data) when is_map(data) do
+    data
+    |> Map.new(fn
+      {:vector, vec} when is_binary(vec) ->
+        # Convert binary vector to base64 for JSON transport
+        {"vector", Base.encode64(vec)}
+      {key, val} when is_atom(key) ->
+        {Atom.to_string(key), serialize_value(val)}
+      {key, val} ->
+        {key, serialize_value(val)}
+    end)
+  end
+
+  defp serialize_value(val) when is_binary(val) and byte_size(val) > 100 do
+    # Likely a binary blob, encode as base64
+    Base.encode64(val)
+  end
+  defp serialize_value(val), do: val
+
+  defp safe_map_size(nil), do: 0
+  defp safe_map_size(list) when is_list(list), do: length(list)
+  defp safe_map_size(map) when is_map(map), do: map_size(map)
+  defp safe_map_size(_), do: 0
 end
 
 

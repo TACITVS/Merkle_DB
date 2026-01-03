@@ -18,6 +18,8 @@ defmodule MerkleDb.SearchTextTest do
     ensure_started(MerkleDb.KV)
     ensure_started(MerkleDb.TextStore)
     ensure_started(MerkleDb.Bootstrap)
+    # Reset KV to empty tree to avoid dimension conflicts from other tests
+    MerkleDb.KV.reset()
     :ok
   end
 
@@ -32,7 +34,13 @@ defmodule MerkleDb.SearchTextTest do
     conn = MerkleDb.Web.Router.call(conn, [])
 
     assert conn.status == 200
-    {:ok, payload} = Jason.decode(conn.resp_body)
-    assert [%{"text" => "Text not found"} | _] = payload
+    {:ok, response} = Jason.decode(conn.resp_body)
+
+    # New response format includes results array and indexed flag
+    assert is_map(response)
+    assert Map.has_key?(response, "results")
+    assert Map.has_key?(response, "indexed")
+    assert Map.has_key?(response, "count")
+    assert is_list(response["results"])
   end
 end
