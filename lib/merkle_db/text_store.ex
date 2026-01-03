@@ -23,6 +23,10 @@ defmodule MerkleDb.TextStore do
     GenServer.call(__MODULE__, :get_all)
   end
 
+  def count do
+    GenServer.call(__MODULE__, :count)
+  end
+
   # --- Server Callbacks ---
 
   @impl true
@@ -54,6 +58,17 @@ defmodule MerkleDb.TextStore do
     # Efficiently fold over the Dets table
     all_data = :dets.foldl(fn {key, val}, acc -> [{key, val} | acc] end, [], @table)
     {:reply, all_data, state}
+  end
+
+  @impl true
+  def handle_call(:count, _from, state) do
+    count =
+      case :dets.info(@table, :size) do
+        :undefined -> 0
+        nil -> 0
+        size -> size
+      end
+    {:reply, count, state}
   end
 
   @impl true
