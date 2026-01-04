@@ -41,6 +41,8 @@ merkle_db-*.tar
 
 # Snapshot data (user-generated)
 /data/
+*.dets
+*.node
 
 # Log files
 *.log
