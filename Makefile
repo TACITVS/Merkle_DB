@@ -83,7 +83,16 @@ C_LIB_OBJS = \
     native/fp_radix_sort.obj \
     native/fp_ray_tracer.obj \
     native/fp_time_series.obj \
-    native/fp_vector_ops.obj
+    native/fp_vector_ops.obj \
+    native/fp_query.obj \
+    native/fp_blake3.obj \
+    native/fp_blake3_official.obj \
+    native/blake3.obj \
+    native/blake3_dispatch.obj \
+    native/blake3_portable.obj \
+    native/blake3_avx2.obj \
+    native/blake3_sse2.obj \
+    native/blake3_sse41.obj
 
 all: $(PRIV_DIR) $(DLL_OUT)
 
@@ -99,6 +108,12 @@ native/%.obj: native/fp_lib/src/wrappers/%.c
 	gcc $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 native/%.obj: native/fp_lib/src/algorithms/%.c
+	gcc $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+native/%.obj: native/fp_lib/src/%.c
+	gcc $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+native/%.obj: native/fp_lib/vendor/%.c
 	gcc $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Link C NIF + ASM Objects + C Lib Objects into DLL

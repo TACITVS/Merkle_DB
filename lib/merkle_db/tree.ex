@@ -3,13 +3,17 @@ defmodule MerkleDb.Tree do
   COLUMNAR STORAGE: A structure optimized for AXPY batch processing.
   - columns: Tuple of binaries. Each binary holds N doubles.
   - keys: Map from Index -> ID (to reconstruct results).
+  - key_index: Map from ID -> Index (for updates/deletes).
+  - tombstones: MapSet of deleted indices.
+  - metadata: Map from Index -> %{field => value}.
+  - quantized: Optional Int8 scalar quantization data.
   - count: Total number of vectors.
   - dim: Number of dimensions.
   - centroids: IVF index centroids (optional).
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -37,6 +41,7 @@ defmodule MerkleDb.Tree do
       key_index: %{},
       tombstones: MapSet.new(),
       metadata: %{},
+      quantized: nil,
       count: 0,
       dim: 0,
       centroids: nil,
@@ -61,6 +66,7 @@ defmodule MerkleDb.Tree do
     |> ensure_tombstones()
     |> ensure_key_index()
     |> ensure_metadata()
+    |> ensure_quantized()
   end
 
   defp ensure_tombstones(%{tombstones: nil} = tree), do: %{tree | tombstones: MapSet.new()}
@@ -69,29 +75,56 @@ defmodule MerkleDb.Tree do
   defp ensure_metadata(%{metadata: nil} = tree), do: %{tree | metadata: %{}}
   defp ensure_metadata(tree), do: tree
 
+  defp ensure_quantized(%{quantized: nil} = tree), do: %{tree | quantized: nil}
+  defp ensure_quantized(tree), do: tree
+
   defp ensure_key_index(%{key_index: nil} = tree) do
-    # Rebuild key_index from keys map
-    # keys is %{index => key}
-    # We want %{key => index}.
-    # If duplicates exist (shouldn't in pure append, but logical update implies latest index wins),
-    # we take the max index for each key.
-    
-    new_key_index =
+    new_key_index = 
       tree.keys
       |> Enum.reduce(%{}, fn {idx, key}, acc ->
-        # If key exists, keep the larger index (newer version)
         Map.update(acc, key, idx, fn old_idx -> max(old_idx, idx) end)
       end)
-      
     %{tree | key_index: new_key_index}
   end
   defp ensure_key_index(tree) do
     if Map.get(tree, :key_index) == nil or (map_size(tree.key_index) == 0 and map_size(tree.keys) > 0) do
-       # Try to populate if empty but keys exist
        ensure_key_index(%{tree | key_index: nil})
     else
        tree
     end
+  end
+
+  @doc """
+  Quantize all vectors in the tree to 8-bit integers.
+  This significantly reduces memory usage and can speed up searches.
+  """
+  def quantize(%__MODULE__{count: 0} = tree), do: tree
+  def quantize(%__MODULE__{columns: nil} = tree), do: tree
+  def quantize(%__MODULE__{} = tree) do
+    q_params = 
+      for d <- 0..(tree.dim - 1) do
+        col_bin = elem(tree.columns, d)
+        floats = for <<x::little-float-64 <- col_bin>>, do: x
+        min_v = Enum.min(floats)
+        max_v = Enum.max(floats)
+        range = max_v - min_v
+        inv_scale = if range == 0, do: 1.0, else: 255.0 / range
+        {min_v, inv_scale}
+      end
+
+    quantized_cols = 
+      for d <- 0..(tree.dim - 1) do
+        col_bin = elem(tree.columns, d)
+        {min_v, inv_scale} = Enum.at(q_params, d)
+        MerkleDb.ASM.fp_quantize_f64_to_u8(col_bin, min_v, inv_scale)
+      end
+
+    new_quantized = %{
+      columns: List.to_tuple(quantized_cols),
+      params: q_params
+    }
+
+    %{tree | quantized: new_quantized, generation: tree.generation + 1}
   end
 
   @doc """
@@ -101,19 +134,14 @@ defmodule MerkleDb.Tree do
   Returns updated tree or raises on error.
   """
   def insert(tree, key, vector_bin, meta \\ %{}) do
-    # Check limits
     if tree.count >= @max_vector_count do
       raise ArgumentError, "Tree size limit reached: #{@max_vector_count} vectors"
     end
 
-    # 1. Parse the incoming vector (little-endian floats)
     floats = for <<x::little-float-size(64) <- vector_bin>>, do: x
     dim = length(floats)
-
-    # 2. L2-normalize for proper cosine similarity
     floats = normalize_vector(floats)
 
-    # 2. Initialize or verify dimensions
     tree = if tree.columns == nil do
       %{tree | dim: dim, columns: List.to_tuple(for _ <- 1..dim, do: <<>>)}
     else
@@ -121,17 +149,14 @@ defmodule MerkleDb.Tree do
       tree
     end
 
-    # 3. Handle Updates: Check if key exists
-    tree =
+    tree = 
       case Map.get(tree.key_index, key) do
         nil -> tree
         old_idx ->
-          # Tombstone the old index
           %{tree | tombstones: MapSet.put(tree.tombstones, old_idx)}
       end
 
-    # 4. Append each dimension to its respective Column
-    new_cols =
+    new_cols = 
       tree.columns
       |> Tuple.to_list()
       |> Enum.zip(floats)
@@ -140,14 +165,11 @@ defmodule MerkleDb.Tree do
       end)
       |> List.to_tuple()
 
-    # 5. Update Key Mappings and Metadata
     new_idx = tree.count
     new_keys = Map.put(tree.keys, new_idx, key)
     new_key_index = Map.put(tree.key_index, key, new_idx)
     new_metadata = if meta == %{}, do: tree.metadata, else: Map.put(tree.metadata, new_idx, meta)
 
-    # 6. Check memory usage
-    # Note: Pass updated fields for estimation
     temp_tree = %{tree | count: new_idx + 1, columns: new_cols, keys: new_keys, key_index: new_key_index, metadata: new_metadata}
     estimated_mb = estimate_memory_mb(temp_tree)
     if estimated_mb > @max_tree_size_gb * 1024 do
@@ -160,20 +182,15 @@ defmodule MerkleDb.Tree do
   @doc """
   Batch insert multiple vectors. ~50x faster than individual inserts.
   Handles updates by tombstoning old indices for existing keys.
-
-  key_vector_pairs: list of {key, vector_bin} or {key, vector_bin, metadata}
   """
   def insert_batch(tree, []), do: tree
   def insert_batch(tree, key_vector_pairs) when is_list(key_vector_pairs) do
     batch_size = length(key_vector_pairs)
-
-    # Check limits upfront
     new_count = tree.count + batch_size
     if new_count > @max_vector_count do
       raise ArgumentError, "Batch would exceed tree size limit: #{new_count} > #{@max_vector_count}"
     end
 
-    # Normalize input format to {key, vec_bin, meta}
     normalized_input = 
       for item <- key_vector_pairs do
         case item do
@@ -182,12 +199,10 @@ defmodule MerkleDb.Tree do
         end
       end
 
-    # Parse first vector to get/verify dimensions
     {_first_key, first_vec_bin, _first_meta} = List.first(normalized_input)
     floats = for <<x::little-float-size(64) <- first_vec_bin>>, do: x
     dim = length(floats)
 
-    # Initialize or verify dimensions
     tree = if tree.columns == nil do
       %{tree | dim: dim, columns: List.to_tuple(for _ <- 1..dim, do: <<>>)}
     else
@@ -195,8 +210,7 @@ defmodule MerkleDb.Tree do
       tree
     end
 
-    # Pre-normalize all vectors for cosine similarity
-    normalized_triplets =
+    normalized_triplets = 
       for {key, vec_bin, meta} <- normalized_input do
         floats = for <<x::little-float-size(64) <- vec_bin>>, do: x
         norm_floats = normalize_vector(floats)
@@ -204,9 +218,7 @@ defmodule MerkleDb.Tree do
         {key, norm_bin, meta}
       end
 
-    # Handle Updates: Identify old indices to tombstone
     batch_keys = Enum.map(normalized_triplets, fn {k, _, _} -> k end)
-    
     updated_tombstones = 
       Enum.reduce(batch_keys, tree.tombstones, fn key, acc ->
         case Map.get(tree.key_index, key) do
@@ -215,22 +227,16 @@ defmodule MerkleDb.Tree do
         end
       end)
       
-    # Append all new vectors
-    column_updates =
+    column_updates = 
       for dim_idx <- 0..(tree.dim - 1) do
         col_bin = elem(tree.columns, dim_idx)
-
-        # Collect all values for this dimension
         new_values = for {_key, vec_bin, _meta} <- normalized_triplets do
           binary_part(vec_bin, dim_idx * 8, 8)
         end
-
-        # Single concat operation per column
         IO.iodata_to_binary([col_bin | new_values])
       end
 
-    # Update keys, key_index, and metadata
-    {new_keys, new_key_index, final_tombstones, final_metadata} =
+    {new_keys, new_key_index, final_tombstones, final_metadata} = 
       normalized_triplets
       |> Enum.with_index(tree.count)
       |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones, tree.metadata}, 
@@ -262,7 +268,6 @@ defmodule MerkleDb.Tree do
       generation: tree.generation + 1
     }
 
-    # Check memory
     estimated_mb = estimate_memory_mb(new_tree)
     if estimated_mb > @max_tree_size_gb * 1024 do
       raise ArgumentError, "Batch would exceed memory limit: #{estimated_mb}MB > #{@max_tree_size_gb}GB"
@@ -281,7 +286,6 @@ defmodule MerkleDb.Tree do
       idx ->
         new_tombstones = MapSet.put(tree.tombstones, idx)
         new_key_index = Map.delete(tree.key_index, key)
-        # We also remove from metadata to save space (since it's not needed if deleted)
         new_metadata = Map.delete(tree.metadata, idx)
         
         %{tree | 
@@ -297,29 +301,22 @@ defmodule MerkleDb.Tree do
   Estimate memory usage in MB.
   """
   def estimate_memory_mb(%__MODULE__{count: count, dim: dim} = tree) do
-    # columns: count * dim * 8 bytes (f64)
-    # keys: count * ~50 bytes (average key size + map overhead)
-    # key_index: count * ~50 bytes (inverse of keys)
-    # metadata: active_count * ~100 bytes (approx)
-    
     columns_mb = (count * dim * 8) / (1024 * 1024)
     keys_mb = (count * 50) / (1024 * 1024)
     key_index_mb = (count * 50) / (1024 * 1024)
-    
     metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
     metadata_mb = (metadata_count * 100) / (1024 * 1024)
-    
     tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
-    tombstones_mb = (tombstones_count * 32) / (1024 * 1024) # Approximate overhead for set
-    
-    Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb, 2)
+    tombstones_mb = (tombstones_count * 32) / (1024 * 1024)
+    quantized_mb = if tree.quantized, do: (count * dim) / (1024 * 1024), else: 0
+    Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb, 2)
   end
 
   @doc """
   Get tree statistics.
   """
   def stats(%__MODULE__{} = tree) do
-    %{
+    %{ 
       count: tree.count,
       active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
       dimensions: tree.dim,
@@ -327,31 +324,24 @@ defmodule MerkleDb.Tree do
       has_ivf_index: tree.centroids != nil,
       cluster_count: map_size(tree.clusters),
       tombstones: MapSet.size(tree.tombstones || MapSet.new()),
-      metadata_entries: map_size(tree.metadata || %{})
+      metadata_entries: map_size(tree.metadata || %{}),
+      quantized: tree.quantized != nil
     }
   end
 
   @doc """
   Convert columnar storage to row-major binary format.
   Used by KMeans and PCA which expect row-major data.
-
-  Returns: binary of count * dim * 8 bytes (row-major f64)
   """
   def flatten(%__MODULE__{count: 0}), do: <<>>
   def flatten(%__MODULE__{columns: nil}), do: <<>>
   def flatten(%__MODULE__{columns: columns, count: count, dim: dim}) do
-    # Convert columnar to row-major
-    # Column d has all values for dimension d: [v0_d, v1_d, v2_d, ...]
-    # Row-major needs: [v0_0, v0_1, ..., v0_dim, v1_0, v1_1, ...]
-
-    # Parse all columns into lists
-    column_lists =
+    column_lists = 
       for d <- 0..(dim - 1) do
         col_bin = elem(columns, d)
         for <<x::little-float-size(64) <- col_bin>>, do: x
       end
 
-    # Build row-major binary
     for row_idx <- 0..(count - 1), into: <<>> do
       for col_idx <- 0..(dim - 1), into: <<>> do
         val = column_lists |> Enum.at(col_idx) |> Enum.at(row_idx)

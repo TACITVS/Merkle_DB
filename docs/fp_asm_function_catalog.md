@@ -1,0 +1,708 @@
+# FP_ASM_LIB Function Catalog (Local Snapshot)
+
+Generated: 2025-12-21 08:19:54
+Source: native/fp_lib/include (graphics/OpenGL/GPU/engine/graph headers excluded)
+
+## Summary
+- Headers included: 24
+- Headers excluded: 12
+- Functions in scope (unique): 383
+- Functions currently exported: 180
+- Missing bindings: 203
+
+## Excluded headers
+- fp_engine_algorithms.h
+- fp_engine_types.h
+- fp_gpu_math.h
+- fp_graphics_engine.h
+- fp_lighting.h
+- fp_mesh_generation.h
+- fp_msaa.h
+- fp_ray_tracer.h
+- fp_shadow_mapping.h
+- gl_extensions.h
+- renderer.h
+- renderer_modern.h
+
+## Included headers
+- application.h
+- ecs.h
+- fp.h
+- fp_3d_math_wrapper.h
+- fp_compose.h
+- fp_compose_inline.h
+- fp_core.h
+- fp_generic.h
+- fp_kmeans.h
+- fp_linear_regression.h
+- fp_math.h
+- fp_monads.h
+- fp_monads_inline.h
+- fp_naive_bayes.h
+- fp_neural_network.h
+- fp_pca.h
+- fp_rng.h
+- fp_stats.h
+- fp_stats_v2.h
+- fp_stats_v3_pure.h
+- fp_time_series.h
+- fp_types.h
+- platform.h
+- stb_image_write.h
+
+## Functions by header
+
+### application.h (0 functions)
+- None
+
+### ecs.h (0 functions)
+- None
+
+### fp.h (5 functions)
+- fp_map_i64 [missing]
+- fp_reduce_i64 [missing]
+- fp_map_square_i64 [missing]
+- fp_reduce_add_i64 [exported]
+- fp_foldmap_sumsq_i64 [missing]
+
+### fp_3d_math_wrapper.h (0 functions)
+- None
+
+### fp_compose.h (34 functions)
+- fp_const_f64 [missing]
+- fp_const_i64 [missing]
+- fp_flip_f64 [missing]
+- fp_flip_i64 [missing]
+- fp_apply_flip_f64 [missing]
+- fp_apply_flip_i64 [missing]
+- fp_compose_f64 [missing]
+- fp_compose_i64 [missing]
+- fp_compose_chain_f64 [missing]
+- fp_compose_chain_i64 [missing]
+- fp_apply_composed_f64 [missing]
+- fp_apply_composed_i64 [missing]
+- fp_pipeline_f64 [missing]
+- fp_pipeline_i64 [missing]
+- fp_pipeline_free_f64 [missing]
+- fp_pipeline_free_i64 [missing]
+- fp_mapping_f64 [missing]
+- fp_filtering_f64 [missing]
+- fp_taking_f64 [missing]
+- fp_compose_transducers [missing]
+- fp_transducer_free [missing]
+- fp_transduce_f64 [missing]
+- fp_curry_map_f64 [missing]
+- fp_apply_partial_map_f64 [missing]
+- fp_curry_filter_f64 [missing]
+- fp_apply_partial_filter_f64 [missing]
+- fp_lazy_range_f64 [missing]
+- fp_lazy_iterate_f64 [missing]
+- fp_lazy_from_array_f64 [missing]
+- fp_lazy_map_f64 [missing]
+- fp_lazy_filter_f64 [missing]
+- fp_lazy_take_f64 [missing]
+- fp_lazy_to_array_f64 [missing]
+- fp_lazy_free_f64 [missing]
+
+### fp_compose_inline.h (0 functions)
+- None
+
+### fp_core.h (213 functions)
+- fp_fold_sumsq_i64 [exported]
+- fp_fold_dotp_i64 [exported]
+- fp_fold_sad_i64 [exported]
+- fp_fold_dotp_f64 [exported]
+- fp_fold_sumsq_i32 [exported]
+- fp_fold_dotp_i32 [exported]
+- fp_fold_sad_i32 [exported]
+- fp_fold_sumsq_f32 [exported]
+- fp_fold_dotp_f32 [exported]
+- fp_fold_sad_f32 [exported]
+- fp_fold_sumsq_u32 [exported]
+- fp_fold_dotp_u32 [exported]
+- fp_fold_sad_u32 [exported]
+- fp_fold_sumsq_u64 [exported]
+- fp_fold_dotp_u64 [exported]
+- fp_fold_sad_u64 [exported]
+- fp_fold_sumsq_i16 [exported]
+- fp_fold_dotp_i16 [exported]
+- fp_fold_sad_i16 [exported]
+- fp_fold_sumsq_u16 [exported]
+- fp_fold_dotp_u16 [exported]
+- fp_fold_sad_u16 [exported]
+- fp_fold_sumsq_i8 [exported]
+- fp_fold_dotp_i8 [exported]
+- fp_fold_sad_i8 [exported]
+- fp_reduce_add_i64 [exported]
+- fp_reduce_max_i64 [exported]
+- fp_reduce_min_i64 [exported]
+- fp_reduce_add_f64 [exported]
+- fp_reduce_add_f64_where [exported]
+- fp_reduce_max_f64 [exported]
+- fp_reduce_min_f64 [exported]
+- fp_reduce_add_i32 [exported]
+- fp_reduce_mul_i32 [exported]
+- fp_reduce_min_i32 [exported]
+- fp_reduce_max_i32 [exported]
+- fp_reduce_add_f32 [exported]
+- fp_reduce_mul_f32 [exported]
+- fp_reduce_min_f32 [exported]
+- fp_reduce_max_f32 [exported]
+- fp_reduce_add_u32 [exported]
+- fp_reduce_mul_u32 [exported]
+- fp_reduce_min_u32 [exported]
+- fp_reduce_max_u32 [exported]
+- fp_reduce_add_u64 [exported]
+- fp_reduce_mul_u64 [exported]
+- fp_reduce_min_u64 [exported]
+- fp_reduce_max_u64 [exported]
+- fp_reduce_add_i16 [exported]
+- fp_reduce_mul_i16 [exported]
+- fp_reduce_min_i16 [exported]
+- fp_reduce_max_i16 [exported]
+- fp_reduce_add_u16 [exported]
+- fp_reduce_mul_u16 [exported]
+- fp_reduce_min_u16 [exported]
+- fp_reduce_max_u16 [exported]
+- fp_reduce_add_i8 [exported]
+- fp_reduce_mul_i8 [exported]
+- fp_reduce_min_i8 [exported]
+- fp_reduce_max_i8 [exported]
+- fp_map_axpy_f64 [exported]
+- fp_map_axpy_i64 [exported]
+- fp_map_axpy_i32 [exported]
+- fp_map_axpy_f32 [exported]
+- fp_map_axpy_u32 [exported]
+- fp_map_axpy_u64 [exported]
+- fp_map_axpy_i16 [exported]
+- fp_map_axpy_u16 [exported]
+- fp_map_axpy_i8 [exported]
+- fp_map_scale_i64 [exported]
+- fp_map_scale_f64 [exported]
+- fp_map_scale_i32 [exported]
+- fp_map_scale_f32 [exported]
+- fp_map_scale_u32 [exported]
+- fp_map_scale_u64 [exported]
+- fp_map_scale_i16 [exported]
+- fp_map_scale_u16 [exported]
+- fp_map_scale_i8 [exported]
+- fp_map_offset_i64 [exported]
+- fp_map_offset_f64 [exported]
+- fp_map_offset_i32 [exported]
+- fp_map_offset_f32 [exported]
+- fp_map_offset_u32 [exported]
+- fp_map_offset_u64 [exported]
+- fp_map_offset_i16 [exported]
+- fp_map_offset_u16 [exported]
+- fp_map_offset_i8 [exported]
+- fp_zip_add_i64 [exported]
+- fp_zip_add_f64 [exported]
+- fp_zip_add_i32 [exported]
+- fp_zip_add_f32 [exported]
+- fp_zip_add_u32 [exported]
+- fp_zip_add_u64 [exported]
+- fp_zip_add_i16 [exported]
+- fp_zip_add_u16 [exported]
+- fp_zip_add_i8 [exported]
+- fp_zip_add_u8 [exported]
+- fp_map_offset_u8 [exported]
+- fp_map_scale_u8 [exported]
+- fp_map_axpy_u8 [exported]
+- fp_fold_sad_u8 [exported]
+- fp_fold_dotp_u8 [exported]
+- fp_fold_sumsq_u8 [exported]
+- fp_reduce_max_u8 [exported]
+- fp_reduce_min_u8 [exported]
+- fp_reduce_mul_u8 [exported]
+- fp_reduce_add_u8 [exported]
+- fp_map_abs_i64 [exported]
+- fp_map_abs_f64 [exported]
+- fp_map_sqrt_f64 [exported]
+- fp_map_clamp_i64 [exported]
+- fp_map_clamp_f64 [exported]
+- fp_scan_add_i64 [exported]
+- fp_scan_add_f64 [exported]
+- fp_pred_all_eq_const_i64 [exported]
+- fp_pred_any_gt_const_i64 [exported]
+- fp_pred_all_gt_zip_i64 [exported]
+- fp_filter_gt_i64_simple [exported]
+- fp_partition_gt_i64 [exported]
+- fp_take_while_gt_i64 [exported]
+- fp_drop_while_gt_i64 [exported]
+- fp_take_n_i64 [exported]
+- fp_drop_n_i64 [exported]
+- fp_slice_i64 [exported]
+- fp_reduce_product_i64 [exported]
+- fp_reduce_product_f64 [exported]
+- fp_find_index_i64 [exported]
+- fp_contains_i64 [exported]
+- fp_reverse_i64 [exported]
+- fp_concat_i64 [exported]
+- fp_replicate_i64 [exported]
+- fp_unique_i64 [exported]
+- fp_union_i64 [exported]
+- fp_intersect_i64 [exported]
+- fp_group_i64 [exported]
+- fp_run_length_encode_i64 [exported]
+- fp_iterate_add_i64 [exported]
+- fp_iterate_mul_i64 [exported]
+- fp_range_i64 [exported]
+- fp_reduce_and_bool [exported]
+- fp_reduce_or_bool [exported]
+- fp_zip_with_index_i64 [exported]
+- fp_replicate_f64 [exported]
+- fp_count_i64 [exported]
+- fp_descriptive_stats_f64 [missing]
+- fp_moments_f64 [exported]
+- fp_percentile_f64 [exported]
+- fp_percentiles_f64 [exported]
+- fp_quartiles_f64 [missing]
+- fp_covariance_f64 [exported]
+- fp_correlation_f64 [exported]
+- fp_linear_regression_f64 [missing]
+- fp_predict_f64 [missing]
+- fp_detect_outliers_zscore_f64 [exported]
+- fp_detect_outliers_iqr_f64 [exported]
+- fp_sma_f64 [exported]
+- fp_ema_f64 [exported]
+- fp_wma_f64 [exported]
+- fp_rolling_reduce_f64 [missing]
+- fp_rolling_reduce_i64 [missing]
+- fp_rolling_min_f64 [exported]
+- fp_rolling_max_f64 [exported]
+- fp_rolling_sum_f64 [exported]
+- fp_rolling_mean_f64 [exported]
+- fp_rolling_min_i64 [exported]
+- fp_rolling_max_i64 [exported]
+- fp_rolling_sum_i64 [exported]
+- fp_rolling_range_f64 [exported]
+- fp_rolling_std_f64 [exported]
+- fp_rolling_variance_f64 [exported]
+- fp_rolling_sum_f64_optimized [exported]
+- fp_rolling_mean_f64_optimized [exported]
+- fp_foldl_i64 [missing]
+- fp_foldl_f64 [missing]
+- fp_map_i64 [missing]
+- fp_map_f64 [missing]
+- fp_filter_i64 [missing]
+- fp_filter_f64 [missing]
+- fp_zipWith_i64 [missing]
+- fp_zipWith_f64 [missing]
+- fp_quat_identity [missing]
+- fp_quat_from_axis_angle [missing]
+- fp_quat_mul [missing]
+- fp_quat_rotate_vec3 [missing]
+- fp_quat_to_euler [missing]
+- fp_quat_normalize [missing]
+- fp_euler_to_quat [missing]
+- fp_quat_normalize_pure_c [missing]
+- fp_euler_to_quat_pure_c [missing]
+- fp_quat_to_mat4_pure_c [missing]
+- fp_quat_normalize_batch [missing]
+- fp_mat4_identity [missing]
+- fp_mat4_mul [missing]
+- fp_mat4_mul_vec3 [missing]
+- fp_mat4_transpose [missing]
+- fp_mat4_mul_vec3_batch [missing]
+- fp_mat4_translation [missing]
+- fp_mat4_scale [missing]
+- fp_mat4_scale_uniform [missing]
+- fp_mat4_rotation_x [missing]
+- fp_mat4_rotation_y [missing]
+- fp_mat4_rotation_z [missing]
+- fp_mat4_rotation_axis [missing]
+- fp_mat4_rotation_euler [missing]
+- fp_mat4_lookat [missing]
+- fp_mat4_perspective [missing]
+- fp_mat4_ortho [missing]
+- fp_mat4_inverse [missing]
+- fp_map_transform_vec3_f32 [missing]
+- fp_zipWith_vec3_add_f32 [missing]
+- fp_map_quat_rotate_vec3_f32 [missing]
+- fp_reduce_vec3_add_f32 [missing]
+- fp_fold_vec3_dot_f32 [missing]
+
+### fp_generic.h (12 functions)
+- fp_foldl_generic [missing]
+- fp_map_generic [missing]
+- fp_filter_generic [missing]
+- fp_zipWith_generic [missing]
+- fp_quicksort_generic [missing]
+- fp_mergesort_generic [missing]
+- fp_partition_generic [missing]
+- fp_take_generic [missing]
+- fp_drop_generic [missing]
+- fp_reverse_generic [missing]
+- fp_find_generic [missing]
+- fp_compose_generic [missing]
+
+### fp_kmeans.h (5 functions)
+- fp_kmeans_print [missing]
+- fp_kmeans_free [missing]
+- fp_kmeans_f64 [exported]
+- fp_kmeans_free_safe [missing]
+- fp_kmeans_f64_safe [missing]
+
+### fp_linear_regression.h (10 functions)
+- fp_linear_regression_free [missing]
+- fp_gradient_descent_print_summary [missing]
+- fp_gradient_descent_free [missing]
+- fp_from_left_msg [missing]
+- fp_linear_regression_closed_form [missing]
+- fp_linear_regression_gradient_descent [missing]
+- fp_linear_regression_predict [missing]
+- fp_linear_regression_r2_score [exported]
+- fp_linear_regression_print [missing]
+- fp_linear_regression_gradient_descent_safe [missing]
+
+### fp_math.h (0 functions)
+- None
+
+### fp_monads.h (61 functions)
+- fp_just_f64 [missing]
+- fp_just_i64 [missing]
+- fp_just_ptr [missing]
+- fp_nothing [missing]
+- fp_is_just [missing]
+- fp_is_nothing [missing]
+- fp_from_just_f64 [missing]
+- fp_from_just_i64 [missing]
+- fp_from_just_ptr [missing]
+- fp_from_maybe_f64 [missing]
+- fp_from_maybe_i64 [missing]
+- fp_from_maybe_ptr [missing]
+- fp_fmap_maybe_f64 [missing]
+- fp_fmap_maybe_i64 [missing]
+- fp_bind_maybe_f64 [missing]
+- fp_bind_maybe_i64 [missing]
+- fp_ap_maybe_f64 [missing]
+- fp_ap_maybe_i64 [missing]
+- fp_left [missing]
+- fp_right_f64 [missing]
+- fp_right_i64 [missing]
+- fp_right_ptr [missing]
+- fp_is_left [missing]
+- fp_is_right [missing]
+- fp_from_left_code [missing]
+- fp_from_right_f64 [missing]
+- fp_from_right_i64 [missing]
+- fp_from_right_ptr [missing]
+- fp_fmap_either_f64 [missing]
+- fp_fmap_either_i64 [missing]
+- fp_bind_either_f64 [missing]
+- fp_bind_either_i64 [missing]
+- fp_fold_either_f64 [missing]
+- fp_fold_either_i64 [missing]
+- fp_safe_divide_f64 [missing]
+- fp_safe_divide_i64 [missing]
+- fp_safe_sqrt_f64 [missing]
+- fp_safe_log_f64 [missing]
+- fp_safe_log10_f64 [missing]
+- fp_safe_at_f64 [missing]
+- fp_safe_at_i64 [missing]
+- fp_safe_head_f64 [missing]
+- fp_safe_head_i64 [missing]
+- fp_safe_tail_f64 [missing]
+- fp_safe_tail_i64 [missing]
+- fp_checked_divide_f64 [missing]
+- fp_checked_divide_i64 [missing]
+- fp_checked_sqrt_f64 [missing]
+- fp_checked_at_f64 [missing]
+- fp_checked_at_i64 [missing]
+- fp_sequence_maybe_f64 [missing]
+- fp_sequence_maybe_i64 [missing]
+- fp_sequence_either_f64 [missing]
+- fp_sequence_either_i64 [missing]
+- fp_traverse_maybe_f64 [missing]
+- fp_traverse_maybe_i64 [missing]
+- fp_cat_maybes_f64 [missing]
+- fp_cat_maybes_i64 [missing]
+- fp_map_maybe_f64 [missing]
+- fp_map_maybe_i64 [missing]
+- fp_partition_either_f64 [missing]
+
+### fp_monads_inline.h (5 functions)
+- fp_just_f64_inline [missing]
+- fp_just_i64_inline [missing]
+- fp_right_f64_inline [missing]
+- fp_right_i64_inline [missing]
+- fp_left_inline [missing]
+
+### fp_naive_bayes.h (12 functions)
+- fp_nb_free_gaussian_model [missing]
+- fp_from_left_msg [missing]
+- fp_nb_free_multinomial_model [missing]
+- fp_gaussian_nb_train [exported]
+- fp_gaussian_nb_predict [missing]
+- fp_gaussian_nb_predict_batch [exported]
+- fp_multinomial_nb_train [exported]
+- fp_multinomial_nb_predict [missing]
+- fp_multinomial_nb_predict_batch [exported]
+- fp_nb_free_prediction [missing]
+- fp_gaussian_nb_train_safe [missing]
+- fp_multinomial_nb_train_safe [missing]
+
+### fp_neural_network.h (9 functions)
+- fp_neural_network_free [missing]
+- fp_from_left_msg [missing]
+- fp_neural_network_create [exported]
+- fp_neural_network_train [exported]
+- fp_neural_network_forward [missing]
+- fp_training_result_free [exported]
+- fp_neural_network_print_summary [exported]
+- fp_training_result_print [exported]
+- fp_neural_network_create_safe [missing]
+
+### fp_pca.h (8 functions)
+- fp_pca_transform [missing]
+- fp_pca_free_model [missing]
+- fp_from_left_msg [missing]
+- fp_pca_fit [exported]
+- fp_pca_inverse_transform [missing]
+- fp_pca_generate_ellipse_data [exported]
+- fp_pca_generate_low_rank_data [exported]
+- fp_pca_fit_safe [missing]
+
+### fp_rng.h (0 functions)
+- None
+
+### fp_stats.h (1 functions)
+- fp_just_f64_inline [missing]
+
+### fp_stats_v2.h (2 functions)
+- fp_fold_dotp_f64 [exported]
+- fp_just_f64_inline [missing]
+
+### fp_stats_v3_pure.h (2 functions)
+- fp_fold_dotp_f64 [exported]
+- fp_just_f64_inline [missing]
+
+### fp_time_series.h (14 functions)
+- fp_generate_trend_series [missing]
+- fp_forecast_print_result [missing]
+- fp_forecast_free_result [missing]
+- fp_forecast_sma [missing]
+- fp_forecast_exponential_smoothing [missing]
+- fp_forecast_double_exponential_smoothing [missing]
+- fp_forecast_linear_trend [missing]
+- fp_forecast_seasonal_naive [missing]
+- fp_generate_seasonal_series [missing]
+- fp_generate_trend_seasonal_series [missing]
+- fp_generate_random_walk [missing]
+- fp_forecast_mape [missing]
+- fp_forecast_mae [missing]
+- fp_forecast_rmse [missing]
+
+### fp_types.h (0 functions)
+- None
+
+### platform.h (0 functions)
+- None
+
+### stb_image_write.h (0 functions)
+- None
+
+## Missing bindings (unique list)
+- fp_ap_maybe_f64
+- fp_ap_maybe_i64
+- fp_apply_composed_f64
+- fp_apply_composed_i64
+- fp_apply_flip_f64
+- fp_apply_flip_i64
+- fp_apply_partial_filter_f64
+- fp_apply_partial_map_f64
+- fp_bind_either_f64
+- fp_bind_either_i64
+- fp_bind_maybe_f64
+- fp_bind_maybe_i64
+- fp_cat_maybes_f64
+- fp_cat_maybes_i64
+- fp_checked_at_f64
+- fp_checked_at_i64
+- fp_checked_divide_f64
+- fp_checked_divide_i64
+- fp_checked_sqrt_f64
+- fp_compose_chain_f64
+- fp_compose_chain_i64
+- fp_compose_f64
+- fp_compose_generic
+- fp_compose_i64
+- fp_compose_transducers
+- fp_const_f64
+- fp_const_i64
+- fp_curry_filter_f64
+- fp_curry_map_f64
+- fp_descriptive_stats_f64
+- fp_drop_generic
+- fp_euler_to_quat
+- fp_euler_to_quat_pure_c
+- fp_filter_f64
+- fp_filter_generic
+- fp_filter_i64
+- fp_filtering_f64
+- fp_find_generic
+- fp_flip_f64
+- fp_flip_i64
+- fp_fmap_either_f64
+- fp_fmap_either_i64
+- fp_fmap_maybe_f64
+- fp_fmap_maybe_i64
+- fp_fold_either_f64
+- fp_fold_either_i64
+- fp_fold_vec3_dot_f32
+- fp_foldl_f64
+- fp_foldl_generic
+- fp_foldl_i64
+- fp_foldmap_sumsq_i64
+- fp_forecast_double_exponential_smoothing
+- fp_forecast_exponential_smoothing
+- fp_forecast_free_result
+- fp_forecast_linear_trend
+- fp_forecast_mae
+- fp_forecast_mape
+- fp_forecast_print_result
+- fp_forecast_rmse
+- fp_forecast_seasonal_naive
+- fp_forecast_sma
+- fp_from_just_f64
+- fp_from_just_i64
+- fp_from_just_ptr
+- fp_from_left_code
+- fp_from_left_msg
+- fp_from_maybe_f64
+- fp_from_maybe_i64
+- fp_from_maybe_ptr
+- fp_from_right_f64
+- fp_from_right_i64
+- fp_from_right_ptr
+- fp_gaussian_nb_predict
+- fp_gaussian_nb_train_safe
+- fp_generate_random_walk
+- fp_generate_seasonal_series
+- fp_generate_trend_seasonal_series
+- fp_generate_trend_series
+- fp_gradient_descent_free
+- fp_gradient_descent_print_summary
+- fp_is_just
+- fp_is_left
+- fp_is_nothing
+- fp_is_right
+- fp_just_f64
+- fp_just_f64_inline
+- fp_just_i64
+- fp_just_i64_inline
+- fp_just_ptr
+- fp_kmeans_f64_safe
+- fp_kmeans_free
+- fp_kmeans_free_safe
+- fp_kmeans_print
+- fp_lazy_filter_f64
+- fp_lazy_free_f64
+- fp_lazy_from_array_f64
+- fp_lazy_iterate_f64
+- fp_lazy_map_f64
+- fp_lazy_range_f64
+- fp_lazy_take_f64
+- fp_lazy_to_array_f64
+- fp_left
+- fp_left_inline
+- fp_linear_regression_closed_form
+- fp_linear_regression_f64
+- fp_linear_regression_free
+- fp_linear_regression_gradient_descent
+- fp_linear_regression_gradient_descent_safe
+- fp_linear_regression_predict
+- fp_linear_regression_print
+- fp_map_f64
+- fp_map_generic
+- fp_map_i64
+- fp_map_maybe_f64
+- fp_map_maybe_i64
+- fp_map_quat_rotate_vec3_f32
+- fp_map_square_i64
+- fp_map_transform_vec3_f32
+- fp_mapping_f64
+- fp_mat4_identity
+- fp_mat4_inverse
+- fp_mat4_lookat
+- fp_mat4_mul
+- fp_mat4_mul_vec3
+- fp_mat4_mul_vec3_batch
+- fp_mat4_ortho
+- fp_mat4_perspective
+- fp_mat4_rotation_axis
+- fp_mat4_rotation_euler
+- fp_mat4_rotation_x
+- fp_mat4_rotation_y
+- fp_mat4_rotation_z
+- fp_mat4_scale
+- fp_mat4_scale_uniform
+- fp_mat4_translation
+- fp_mat4_transpose
+- fp_mergesort_generic
+- fp_multinomial_nb_predict
+- fp_multinomial_nb_train_safe
+- fp_nb_free_gaussian_model
+- fp_nb_free_multinomial_model
+- fp_nb_free_prediction
+- fp_neural_network_create_safe
+- fp_neural_network_forward
+- fp_neural_network_free
+- fp_nothing
+- fp_partition_either_f64
+- fp_partition_generic
+- fp_pca_fit_safe
+- fp_pca_free_model
+- fp_pca_inverse_transform
+- fp_pca_transform
+- fp_pipeline_f64
+- fp_pipeline_free_f64
+- fp_pipeline_free_i64
+- fp_pipeline_i64
+- fp_predict_f64
+- fp_quartiles_f64
+- fp_quat_from_axis_angle
+- fp_quat_identity
+- fp_quat_mul
+- fp_quat_normalize
+- fp_quat_normalize_batch
+- fp_quat_normalize_pure_c
+- fp_quat_rotate_vec3
+- fp_quat_to_euler
+- fp_quat_to_mat4_pure_c
+- fp_quicksort_generic
+- fp_reduce_i64
+- fp_reduce_vec3_add_f32
+- fp_reverse_generic
+- fp_right_f64
+- fp_right_f64_inline
+- fp_right_i64
+- fp_right_i64_inline
+- fp_right_ptr
+- fp_rolling_reduce_f64
+- fp_rolling_reduce_i64
+- fp_safe_at_f64
+- fp_safe_at_i64
+- fp_safe_divide_f64
+- fp_safe_divide_i64
+- fp_safe_head_f64
+- fp_safe_head_i64
+- fp_safe_log10_f64
+- fp_safe_log_f64
+- fp_safe_sqrt_f64
+- fp_safe_tail_f64
+- fp_safe_tail_i64
+- fp_sequence_either_f64
+- fp_sequence_either_i64
+- fp_sequence_maybe_f64
+- fp_sequence_maybe_i64
+- fp_take_generic
+- fp_taking_f64
+- fp_transduce_f64
+- fp_transducer_free
+- fp_traverse_maybe_f64
+- fp_traverse_maybe_i64
+- fp_zipWith_f64
+- fp_zipWith_generic
+- fp_zipWith_i64
+- fp_zipWith_vec3_add_f32

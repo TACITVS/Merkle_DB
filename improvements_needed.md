@@ -7,6 +7,7 @@
 
 ## Recent Implementations
 
+- **2026-01-04**: Int8 Scalar Quantization implemented (8x memory reduction, AVX2-accelerated)
 - **2026-01-04**: Metadata/Scalar Filtering implemented (`:where` filter with eq, neq, gt, lt, gte, lte, in)
 - **2026-01-04**: Delete/Update Operations implemented (Tombstone-based soft delete, logical updates)
 - **2026-01-04**: Range Queries implemented (`:range` query type with min/max similarity bounds)
@@ -120,34 +121,26 @@ Query.execute(tree, [:range, query_vec, 0.8, 1.0, {:where, [{"tenant_id", :eq, 1
 
 ---
 
-### Priority 4: Vector Quantization
+### Priority 4: Vector Quantization - IMPLEMENTED (Int8)
 
-**Current State:** All vectors stored as float64 (8 bytes per dimension).
+**Status:** PARTIALLY IMPLEMENTED (Int8 Scalar Quantization) (2026-01-04)
 
-**Impact:**
-- 1M vectors @ 768 dims = 6.1 GB RAM (float64)
-- Same with int8 quantization = 768 MB (8x reduction)
-- Binary quantization = 96 MB (64x reduction)
+**Implementation:**
+- **Scalar Quantization (Int8):** Vectors are compressed from 64-bit floats to 8-bit integers.
+- **AVX2 Acceleration:** Quantization and search kernels are optimized using AVX2 SIMD instructions.
+- **Space Efficiency:** 8x reduction in vector storage size.
+- **Integration:** Automated quantization via `Tree.quantize/1`. Search automatically uses quantized index if available.
 
-**Recommended Implementation:**
-```
-1. Scalar Quantization (int8)
-   - Store min/max per dimension
-   - Quantize: q = round((x - min) / (max - min) * 255)
-   - Dequantize during search or use int8 kernels
+**Usage:**
+```elixir
+# Quantize the tree
+tree = MerkleDb.Tree.quantize(tree)
 
-2. Product Quantization (PQ)
-   - Split vector into subvectors
-   - Cluster each subspace independently
-   - Store cluster IDs instead of values
-
-3. Binary Quantization
-   - Threshold each dimension at mean/median
-   - Store as bit vector
-   - Use Hamming distance for search
+# Search automatically uses Int8 index
+results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 ```
 
-**Effort:** Medium per type (2-3 days each)
+**Effort:** Medium per type (2-3 days each) - DONE (Int8)
 
 ---
 
@@ -287,7 +280,7 @@ KV.insert("products", key, vector)
 3. ~~Range queries~~ - DONE (2026-01-04)
 
 ### Phase 2: Performance Parity (2-3 weeks)
-4. Int8 scalar quantization
+4. ~~Int8 scalar quantization~~ - DONE (2026-01-04)
 5. HNSW index implementation
 6. Namespaces/collections
 

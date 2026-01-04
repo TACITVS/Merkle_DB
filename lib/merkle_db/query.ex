@@ -63,9 +63,64 @@ defmodule MerkleDb.Query do
         tree.centroids != nil and where_filter == nil ->
           execute_ivf(tree, query_vec, k, threshold)
 
+        tree.quantized != nil and where_filter == nil ->
+          # Use quantized search if available and no filter
+          execute_quantized(tree, query_vec, k, threshold)
+
         true ->
           execute_flat(tree, query_vec, k, threshold, nil, where_filter)
       end
+    end
+  end
+
+  # ==================== Quantized Search ====================
+
+  defp execute_quantized(tree, query_vec, k, threshold) do
+    count = tree.count
+    dim = tree.dim
+    tombstones = tree.tombstones || MapSet.new()
+    %{columns: q_cols, params: q_params} = tree.quantized
+
+    # 1. Normalize and parse query
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+
+    # 2. Pre-process query for quantized dot product
+    # Dot product logic:
+    # float_val = (uint8_val * scale) + min
+    # sum(float_val_d * q_d) = sum(((uint8_val_d * scale_d) + min_d) * q_d)
+    #                        = sum(uint8_val_d * (scale_d * q_d) + (min_d * q_d))
+    #                        = sum(uint8_val_d * scaled_q_d) + sum(min_d * q_d)
+    # where scaled_q_d = q_d / inv_scale_d
+    #       bias = sum(min_d * q_d)
+
+    {scaled_q_list, bias} = 
+      Enum.zip(q_norm_list, q_params)
+      |> Enum.reduce({[], 0.0}, fn {q_d, {min_d, inv_scale_d}}, {s_acc, b_acc} ->
+        scale_d = 1.0 / inv_scale_d
+        {[q_d * scale_d | s_acc], b_acc + (min_d * q_d)}
+      end)
+    
+    scaled_q_bin = for s <- Enum.reverse(scaled_q_list), into: <<>>, do: <<s::little-float-64>>
+
+    # 3. Call NIF
+    scores_bin = ASM.fp_query_gemv_quantized(q_cols, scaled_q_bin, bias, count, dim)
+
+    # 4. Top-K selection (same as flat)
+    {result_count, indices_bin, result_scores_bin} =
+      ASM.fp_query_topk(scores_bin, count, k, threshold)
+
+    if result_count == 0 do
+      []
+    else
+      indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+      scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
+
+      Enum.zip(indices, scores)
+      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.take(k)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
     end
   end
 

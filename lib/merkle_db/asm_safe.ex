@@ -157,8 +157,8 @@ defmodule MerkleDb.ASM.Safe do
 
   # ==================== Validation Helpers ====================
 
-  defp validate_positive(name, value) when is_integer(value) and value > 0, do: :ok
-  defp validate_positive(name, value) when is_float(value) and value > 0.0, do: :ok
+  defp validate_positive(_name, value) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive(_name, value) when is_float(value) and value > 0.0, do: :ok
   defp validate_positive(name, _value) do
     {:error, "#{name} must be positive"}
   end

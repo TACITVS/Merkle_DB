@@ -12,6 +12,11 @@ defmodule MerkleDb.Progress do
     GenServer.cast(__MODULE__, {:update, topics_found, verses_scanned, total_verses})
   end
 
+  # Called by IndexBuilder/FP jobs for generic status updates
+  def report(%{} = status_map) do
+    GenServer.cast(__MODULE__, {:update_status, status_map})
+  end
+
   # Called when job finishes
   def complete(result_json) do
     GenServer.cast(__MODULE__, {:complete, result_json})
@@ -38,6 +43,11 @@ defmodule MerkleDb.Progress do
   def handle_cast({:update, t, v, total}, _state) do
     percent = if total == 0, do: 0, else: Float.round((v / total) * 100, 1)
     {:noreply, %{status: :running, topics: t, scanned: v, total: total, percent: percent}}
+  end
+
+  @impl true
+  def handle_cast({:update_status, status_map}, _state) do
+    {:noreply, status_map}
   end
 
   @impl true

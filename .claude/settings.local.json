@@ -3,7 +3,36 @@
     "allow": [
       "Bash(mix run:*)",
       "Bash(mix compile:*)",
-      "Bash(elixir:*)"
+      "Bash(elixir:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout:*)",
+      "Bash(powershell:*)",
+      "Bash(git -C \"C:\\\\Users\\\\baian\\\\merkle_db\" log --oneline -20)",
+      "Bash(wc:*)",
+      "Bash(mkdir:*)",
+      "Bash(mix test:*)",
+      "Bash(set:*)",
+      "Bash(cmd.exe:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(rm:*)",
+      "Bash(wmic cpu get:*)",
+      "Bash(mix phx.server:*)",
+      "Bash(\"C:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/cc1.exe\" -quiet -I ../../include fp_compose.c)",
+      "Bash(build_blake3.bat)",
+      "Bash(ls:*)",
+      "Bash(/mingw64/bin/gcc.exe:*)",
+      "Bash(/c/msys64/mingw64/bin/gcc -O3 -msse4.1 -c fp_lib/vendor/blake3_sse41.c -o blake3_sse41.obj -I fp_lib/vendor)",
+      "Bash(script -c \"/c/msys64/mingw64/bin/gcc -O3 -msse4.1 -c fp_lib/vendor/blake3_sse41.c -o blake3_sse41.obj -I fp_lib/vendor\" /tmp/gcc_script.log)",
+      "Bash(\"C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/cc1.exe\" -quiet -I fp_lib/vendor -D_REENTRANT fp_lib/vendor/blake3_sse41.c -msse4.1 -mtune=generic -march=nocona -O3 -o /tmp/test.s)",
+      "Bash(/c/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/cc1.exe -quiet -I fp_lib/vendor -D_REENTRANT \"fp_lib/vendor/blake3_sse41.c\" -msse4.1 -O3 -o /tmp/test.s)",
+      "Bash(/c/msys64/msys2_shell.cmd -mingw64 -defterm -no-start -c \"cd /c/Users/baian/merkle_db && gcc -O0 -std=c11 -Wall -Inative -Inative/fp_lib/include -c native/fp_lib/src/wrappers/fp_compose.c -o native/fp_compose.obj 2>&1; echo Exit: $?\")",
+      "Bash(/c/msys64/msys2_shell.cmd -mingw64 -defterm -no-start -c \"cd /c/Users/baian/merkle_db && make 2>&1\")",
+      "Bash(/c/msys64/msys2_shell.cmd -mingw64 -defterm -no-start -c \"which make mingw32-make 2>&1\")",
+      "Bash(build_all.bat)",
+      "Bash(dir build_all.bat)"
     ]
   }
 }

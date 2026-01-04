@@ -113,7 +113,7 @@ defmodule BridgeGeneratorV7 do
     #include <stdbool.h>
     #include <string.h>
     #ifdef __GNUC__
-      #define _SAVED_GNUC_ __GNUC__ 
+      #define _SAVED_GNUC_ __GNUC__
       #undef __GNUC__
     #endif
     #include <erl_nif.h>
@@ -123,21 +123,29 @@ defmodule BridgeGeneratorV7 do
     #endif
     #{include_directives}
     #{res_decls}
+
+    // Size validation helpers to prevent OOB access
+    static inline int validate_binary_size(ErlNifBinary* bin, size_t elem_size, size_t min_count) {
+        if (min_count == 0) return 1;  // Allow empty when 0 count expected
+        size_t required = elem_size * min_count;
+        return bin->size >= required && (bin->size % elem_size) == 0;
+    }
+
     static void fp_pca_free_result_internal(PCAResult* res) { fp_pca_free_model(&res->model); }
     #{destructors_code}
     #{accessors}
     """
     
-    accessor_entries = Enum.flat_map(@struct_fields, fn {struct_type, fields} -> 
-      Enum.map(fields, fn {field_name, _, _} -> 
-        "{\"get_#{struct_type}_#{field_name}\", 2, nif_get_#{struct_type}_#{field_name}}"
+    accessor_entries = Enum.flat_map(@struct_fields, fn {struct_type, fields} ->
+      Enum.map(fields, fn {field_name, _, _} ->
+        "{\"get_#{struct_type}_#{field_name}\", 2, nif_get_#{struct_type}_#{field_name}, 0}"
       end)
     end) |> Enum.join(",\n    ")
 
     wrappers = Enum.map_join(funcs, "\n\n", &generate_c_wrapper/1)
     entries = Enum.map_join(funcs, ",\n    ", fn f ->
-      dirty_flag = if should_use_dirty?(f.name), do: ", ERL_NIF_DIRTY_JOB_CPU_BOUND", else: ""
-      "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}#{dirty_flag}}"
+      flags = if should_use_dirty?(f.name), do: "ERL_NIF_DIRTY_JOB_CPU_BOUND", else: "0"
+      "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}, #{flags}}"
     end)
     
     File.write!(@c_nif_out, "// GENERATED V7\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { \n    #{entries},\n    #{accessor_entries} \n}; \nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
@@ -162,20 +170,74 @@ defmodule BridgeGeneratorV7 do
     """
   end
 
+  # Get element size for a pointer type
+  defp elem_size_for_type(type) do
+    case type do
+      "double" -> 8
+      "float" -> 4
+      "int64_t" -> 8
+      "uint64_t" -> 8
+      "int32_t" -> 4
+      "uint32_t" -> 4
+      "int" -> 4
+      "unsigned int" -> 4
+      "int16_t" -> 2
+      "uint16_t" -> 2
+      "int8_t" -> 1
+      "uint8_t" -> 1
+      "size_t" -> 8
+      "bool" -> 1
+      _ -> 1  # Unknown type, assume 1 byte (will still catch gross mismatches)
+    end
+  end
+
+  # Find the count argument that follows a pointer arg (pattern: const T* data, size_t n)
+  defp find_count_arg(args, ptr_idx) do
+    # Look for next arg that's a size_t, int, or similar count type
+    count_types = ["size_t", "int", "int32_t", "int64_t", "uint64_t"]
+    Enum.with_index(args)
+    |> Enum.find(fn {arg, i} ->
+      i > ptr_idx and arg.type in count_types and not arg.is_ptr
+    end)
+  end
+
   defp generate_c_wrapper(func) do
+    # Build setup code with size validation for const pointer inputs
     setup = Enum.with_index(func.args) |> Enum.map_join("\n    ", fn {arg, i} ->
       cond do
-        arg.type in Map.keys(@destructors) -> 
+        arg.type in Map.keys(@destructors) ->
             "#{arg.type}* res_#{arg.name}; if (!enif_get_resource(env, argv[#{i}], RES_TYPE_#{arg.type}, (void**)&res_#{arg.name})) return enif_make_badarg(env);"
-        arg.is_ptr -> 
+        arg.is_ptr ->
             if arg.is_const do
-                "ErlNifBinary bin_#{arg.name}; if (!enif_inspect_binary(env, argv[#{i}], &bin_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)bin_#{arg.name}.data;"
+                # For const pointers, add size validation if we can find the count arg
+                case find_count_arg(func.args, i) do
+                  {count_arg, _} ->
+                    # Validate after both binary and count are parsed
+                    "ErlNifBinary bin_#{arg.name}; if (!enif_inspect_binary(env, argv[#{i}], &bin_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)bin_#{arg.name}.data; /* validated with val_#{count_arg.name} */"
+                  nil ->
+                    "ErlNifBinary bin_#{arg.name}; if (!enif_inspect_binary(env, argv[#{i}], &bin_#{arg.name})) return enif_make_badarg(env); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)bin_#{arg.name}.data;"
+                end
             else
                 "ErlNifUInt64 size_#{arg.name}; if (!enif_get_uint64(env, argv[#{i}], &size_#{arg.name})) return enif_make_badarg(env); ErlNifBinary out_bin_#{arg.name}; enif_alloc_binary((size_t)size_#{arg.name}, &out_bin_#{arg.name}); #{arg.type}* ptr_#{arg.name} = (#{arg.type}*)out_bin_#{arg.name}.data;"
             end
         true -> parse_scalar(arg.type, "val_#{arg.name}", i)
       end
     end)
+
+    # Generate validation checks after all args are parsed
+    # Skip resource types (they use res_ prefix, not bin_)
+    validations = Enum.with_index(func.args)
+    |> Enum.filter(fn {arg, _} -> arg.is_ptr and arg.is_const and not (arg.type in Map.keys(@destructors)) end)
+    |> Enum.map(fn {arg, i} ->
+      elem_size = elem_size_for_type(arg.type)
+      case find_count_arg(func.args, i) do
+        {count_arg, _} ->
+          "if (!validate_binary_size(&bin_#{arg.name}, #{elem_size}, (size_t)val_#{count_arg.name})) return enif_make_badarg(env);"
+        nil -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n    ")
 
     call_args = Enum.map_join(func.args, ", ", fn arg -> 
         cond do
@@ -197,7 +259,10 @@ defmodule BridgeGeneratorV7 do
 
     return_stmt = construct_return_v3(func.return_type, Enum.filter(func.args, fn a -> a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)) end))
 
-    "static ERL_NIF_TERM nif_#{func.name}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {\n    #{setup}\n    #{body}\n    #{return_stmt}\n}"
+    # Include validation block if we have validations
+    validation_block = if validations != "", do: "\n    #{validations}", else: ""
+
+    "static ERL_NIF_TERM nif_#{func.name}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {\n    #{setup}#{validation_block}\n    #{body}\n    #{return_stmt}\n}"
   end
 
   defp parse_scalar(type, var, i) do
@@ -246,25 +311,91 @@ defmodule BridgeGeneratorV7 do
   defp box_return("double"), do: "enif_make_double(env, res)"
   defp box_return("float"), do: "enif_make_double(env, (double)res)"
   defp box_return("bool"), do: "res ? enif_make_atom(env, \"true\") : enif_make_atom(env, \"false\")"
-  defp box_return(_), do: "enif_make_int(env, 0)"
+  # Small integer types - cast to appropriate Erlang term type
+  defp box_return("int8_t"), do: "enif_make_int(env, (int)res)"
+  defp box_return("uint8_t"), do: "enif_make_uint(env, (unsigned int)res)"
+  defp box_return("int16_t"), do: "enif_make_int(env, (int)res)"
+  defp box_return("uint16_t"), do: "enif_make_uint(env, (unsigned int)res)"
+  # Catch-all should fail loudly rather than silently return 0
+  defp box_return(unknown_type), do: raise "BUG: Unsupported return type '#{unknown_type}' in box_return/1"
 
   defp generate_elixir_module(funcs) do
     reserved = ["end", "fn", "do", "in", "true", "false", "nil", "after", "catch", "else", "rescue", "quote", "unquote"]
     defs = Enum.map_join(funcs, "\n\n", fn f ->
-      args = Enum.map_join(f.args, ", ", fn a -> 
+      args = Enum.map_join(f.args, ", ", fn a ->
         name = if a.is_ptr and not a.is_const and not (a.type in Map.keys(@destructors)), do: "size_#{a.name}", else: "#{a.name}"
-        if name in reserved, do: "#{name}_", else: name
+        name = if name in reserved, do: "#{name}_", else: name
+        # Prefix with underscore since NIF stubs don't use the params
+        "_#{name}"
       end)
       "@doc \"Calls C function: #{f.name}\"\ndef #{f.name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
     end)
 
     accessor_defs = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} ->
       Enum.map_join(fields, "\n", fn {field_name, _, _} ->
-        "def get_#{struct_type}_#{field_name}(res, size \\\\ 0), do: :erlang.nif_error(:nif_not_loaded)"
+        "def get_#{struct_type}_#{field_name}(_res, _size \\\\ 0), do: :erlang.nif_error(:nif_not_loaded)"
       end)
     end)
 
-    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}\nend")
+    # Query functions (manually maintained, not auto-generated from headers)
+    query_functions = """
+
+# --- Query Kernels (manually added) ---
+
+@doc \"\"\"
+Single-pass columnar GEMV for vector similarity search.
+Replaces the 64-allocation loop with one NIF call.
+
+columns_tuple: tuple of dim binaries (each count*8 bytes)
+query_bin: normalized query vector (dim*8 bytes)
+count: number of vectors
+dim: dimension
+
+Returns: scores binary (count*8 bytes)
+\"\"\"
+def fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc \"\"\"
+Indexed columnar GEMV for IVF search.
+Only computes scores for specified row indices - O(num_indices * dim) instead of O(count * dim).
+
+columns_tuple: tuple of dim column binaries
+query_bin: normalized query vector (dim*8 bytes)
+indices_bin: int32 array of candidate row indices
+count: total number of vectors
+dim: vector dimension
+
+Returns: scores binary (num_indices*8 bytes, in same order as indices)
+\"\"\"
+def fp_query_gemv_indexed(_columns_tuple, _query_bin, _indices_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc \"\"\"
+Top-K selection from scores array.
+
+scores_bin: scores binary (count*8 bytes)
+count: number of scores
+k: number of top results
+threshold: minimum score threshold
+
+Returns: {result_count, indices_bin, scores_bin}
+  - indices_bin: int32 indices of top results
+  - scores_bin: float64 scores of top results
+\"\"\"
+def fp_query_topk(_scores_bin, _count, _k, _threshold), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- BLAKE3 Cryptographic Hash ---
+
+@doc \"\"\"
+BLAKE3 cryptographic hash (3-5x faster than SHA-256).
+
+input: binary data to hash
+
+Returns: 32-byte hash binary
+\"\"\"
+def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
+"""
+
+    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
   end
 end
 
