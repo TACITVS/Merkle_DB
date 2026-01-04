@@ -29,6 +29,20 @@ ErlNifResourceType* RES_TYPE_NeuralNetwork;
 ErlNifResourceType* RES_TYPE_PCAModel;
 ErlNifResourceType* RES_TYPE_PCAResult;
 ErlNifResourceType* RES_TYPE_TrainingResult;
+static ERL_NIF_TERM nif_fp_job_start(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_status(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_job_cancel(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_query_gemv_indexed(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_query_topk(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_quantize_f64_to_u8(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_query_gemv_quantized(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_sparse_dotp(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_hnsw_create(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_hnsw_insert(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_blake3_hash(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 
 // Size validation helpers to prevent OOB access
 static inline int validate_binary_size(ErlNifBinary* bin, size_t elem_size, size_t min_count) {
@@ -2012,7 +2026,21 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"get_PCAModel_n_components", 2, nif_get_PCAModel_n_components, 0},
     {"get_PCAModel_eigenvalues", 2, nif_get_PCAModel_eigenvalues, 0},
     {"get_PCAModel_total_variance", 2, nif_get_PCAModel_total_variance, 0},
-    {"get_PCAResult_converged", 2, nif_get_PCAResult_converged, 0} 
+    {"get_PCAResult_converged", 2, nif_get_PCAResult_converged, 0},
+    {"fp_job_start", 3, nif_fp_job_start, 0},
+    {"fp_job_status", 1, nif_fp_job_status, 0},
+    {"fp_job_result", 1, nif_fp_job_result, 0},
+    {"fp_job_cancel", 1, nif_fp_job_cancel, 0},
+    {"fp_query_gemv_columnar", 4, nif_fp_query_gemv_columnar, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_query_gemv_indexed", 5, nif_fp_query_gemv_indexed, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_query_topk", 4, nif_fp_query_topk, 0},
+    {"fp_quantize_f64_to_u8", 3, nif_fp_quantize_f64_to_u8, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_query_gemv_quantized", 5, nif_fp_query_gemv_quantized, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_sparse_dotp", 4, nif_fp_sparse_dotp, 0},
+    {"fp_hnsw_create", 4, nif_fp_hnsw_create, 0},
+    {"fp_hnsw_insert", 5, nif_fp_hnsw_insert, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_hnsw_search", 6, nif_fp_hnsw_search, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_blake3_hash", 1, nif_fp_blake3_hash, 0} 
 }; 
 static int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { RES_TYPE_GaussianNBModel = enif_open_resource_type(env, NULL, "GaussianNBModel", dtor_GaussianNBModel, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);
     RES_TYPE_KMeansResult = enif_open_resource_type(env, NULL, "KMeansResult", dtor_KMeansResult, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);

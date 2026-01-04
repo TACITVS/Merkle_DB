@@ -24,20 +24,27 @@ defmodule MerkleDb.JobScheduler do
 
   @impl true
   def handle_cast(:start, _state) do
+    # 1. Grab Immutable Snapshot (Thread-Safe)
     tree = KV.snapshot()
     if tree.count == 0, do: throw("Empty DB")
     
     queue = Map.keys(tree.keys) |> Enum.shuffle()
     
+    # 2. Update state to indicate running
     new_state = %{
       status: :running, 
-      queue: queue, 
+      queue: [], 
       visited: MapSet.new(), 
       topics: [],
       total: length(queue)
     }
     
-    send(self(), :tick)
+    # 3. Spawn the Coordinator Task to keep the GenServer responsive.
+    parent = self()
+    Task.start_link(fn ->
+      run_parallel_job(tree, queue, parent)
+    end)
+
     {:noreply, new_state}
   end
 
@@ -46,12 +53,17 @@ defmodule MerkleDb.JobScheduler do
   
   @impl true
   def handle_cast(:resume, state) do
-    send(self(), :tick)
     {:noreply, %{state | status: :running}}
   end
 
   @impl true
   def handle_cast(:stop, state), do: {:noreply, %{state | status: :idle}}
+
+  @impl true
+  def handle_cast({:job_complete, {topics, visited}}, state) do
+    IO.puts("Parallel job complete. Found #{length(topics)} topics.")
+    {:noreply, %{state | status: :done, topics: topics, visited: visited}}
+  end
 
   @impl true
   def handle_cast(:load_from_disk, _state) do
@@ -75,8 +87,11 @@ defmodule MerkleDb.JobScheduler do
 
   @impl true
   def handle_call(:get_status, _from, state) do
-    scanned = state.total - length(state.queue)
-    percent = if state.total == 0, do: 0, else: Float.round((scanned / state.total) * 100, 1)
+    percent =
+      case state.status do
+        :done -> 100.0
+        _ -> 0.0
+      end
     
     response = %{
       status: state.status,
@@ -87,28 +102,29 @@ defmodule MerkleDb.JobScheduler do
     {:reply, response, state}
   end
 
-  # --- THE LOOP ---
-  @impl true
-  def handle_info(:tick, state) do
-    cond do
-      state.status != :running -> {:noreply, state}
-      state.queue == [] -> {:noreply, %{state | status: :done}}
-      true ->
-        # 1. Pop next candidate
-        [idx | rest] = state.queue
-        tree = KV.snapshot()
+  # --- THE PARALLEL PIPELINE ---
+  defp run_parallel_job(tree, queue, parent_pid) do
+    cores = System.schedulers_online()
+    IO.puts("Starting parallel job on #{cores} schedulers.")
 
-        # 2. Analyze (Pure Function)
-        # 3. Update State based on result
-        {final_topics, final_visited} = case Cluster.analyze_step(tree, idx, state.visited) do
-           {:found, topic, v} -> {[topic | state.topics], v}
-           {:skip, v} -> {state.topics, v}
-        end
+    results =
+      queue
+      |> Task.async_stream(fn idx ->
+        Cluster.analyze_step(tree, idx, MapSet.new())
+      end, max_concurrency: cores, ordered: false, timeout: :infinity)
+      |> Enum.reduce({[], MapSet.new()}, fn
+        {:ok, result}, {acc_topics, acc_visited} ->
+          case result do
+            {:found, topic, new_visited} ->
+              {[topic | acc_topics], MapSet.union(acc_visited, new_visited)}
+            {:skip, new_visited} ->
+              {acc_topics, MapSet.union(acc_visited, new_visited)}
+          end
+        {:exit, reason}, acc ->
+          IO.puts("Worker crashed: #{inspect(reason)}")
+          acc
+      end)
 
-        # 4. Schedule next tick
-        send(self(), :tick)
-        
-        {:noreply, %{state | queue: rest, visited: final_visited, topics: final_topics}}
-    end
+    GenServer.cast(parent_pid, {:job_complete, results})
   end
 end

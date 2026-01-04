@@ -61,9 +61,12 @@ defmodule MerkleDb.KV do
     GenServer.call(__MODULE__, {:generation, collection})
   end
 
-  # ==================== Callbacks ====================
+  @doc "Reset a collection to empty state"
+  def reset(collection \\ "default") do
+    GenServer.call(__MODULE__, {:reset, collection})
+  end
 
-  @impl true
+  # ==================== Callbacks ====================
   def init(_) do
     # Load all existing collections from disk
     collections = 
@@ -199,5 +202,12 @@ defmodule MerkleDb.KV do
       nil -> {:error, :collection_not_found}
       tree -> {:ok, tree}
     end
+  end
+
+  @impl true
+  def handle_call({:reset, collection}, _from, collections) do
+    # Reset specific collection to empty tree
+    new_tree = MerkleDb.Tree.new()
+    {:reply, :ok, Map.put(collections, collection, new_tree)}
   end
 end

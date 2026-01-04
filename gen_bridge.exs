@@ -48,6 +48,30 @@ defmodule BridgeGeneratorV7 do
     "fp_multinomial_nb_train"
   ]
 
+  @extra_nif_entries [
+    {"fp_job_start", 3, "nif_fp_job_start", 0},
+    {"fp_job_status", 1, "nif_fp_job_status", 0},
+    {"fp_job_result", 1, "nif_fp_job_result", 0},
+    {"fp_job_cancel", 1, "nif_fp_job_cancel", 0},
+    {"fp_query_gemv_columnar", 4, "nif_fp_query_gemv_columnar", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_query_gemv_indexed", 5, "nif_fp_query_gemv_indexed", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_query_topk", 4, "nif_fp_query_topk", 0},
+    {"fp_quantize_f64_to_u8", 3, "nif_fp_quantize_f64_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_query_gemv_quantized", 5, "nif_fp_query_gemv_quantized", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_sparse_dotp", 4, "nif_fp_sparse_dotp", 0},
+    {"fp_hnsw_create", 4, "nif_fp_hnsw_create", 0},
+    {"fp_hnsw_insert", 5, "nif_fp_hnsw_insert", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_hnsw_search", 6, "nif_fp_hnsw_search", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_blake3_hash", 1, "nif_fp_blake3_hash", 0}
+  ]
+
+  @extra_elixir_defs [
+    {"fp_job_start", ["op", "args", "opts"]},
+    {"fp_job_status", ["job"]},
+    {"fp_job_result", ["job"]},
+    {"fp_job_cancel", ["job"]}
+  ]
+
   defp should_use_dirty?(func_name) do
     func_name in @dirty_functions or
     String.contains?(func_name, ["train", "fit", "generate_low_rank", "generate_ellipse"])
@@ -100,6 +124,9 @@ defmodule BridgeGeneratorV7 do
   defp generate_c_nif(funcs, headers) do
     include_directives = Enum.map_join(headers, "\n", fn h -> "#include \"fp_lib/include/#{Path.basename(h)}\"" end)
     res_decls = Enum.map_join(@destructors, "\n", fn {type, _} -> "ErlNifResourceType* RES_TYPE_#{type};" end)
+    extra_decls = Enum.map_join(@extra_nif_entries, "\n", fn {_, _, func, _} ->
+      "static ERL_NIF_TERM #{func}(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);"
+    end)
     destructors_code = Enum.map_join(@destructors, "\n\n", fn {type, free_fn} -> "void dtor_#{type}(ErlNifEnv* env, void* obj) { #{type}* res = (#{type}*)obj; #{free_fn}(res); }" end)
     res_init = Enum.map_join(@destructors, "\n    ", fn {type, _} -> "RES_TYPE_#{type} = enif_open_resource_type(env, NULL, \"#{type}\", dtor_#{type}, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);" end)
 
@@ -123,6 +150,7 @@ defmodule BridgeGeneratorV7 do
     #endif
     #{include_directives}
     #{res_decls}
+    #{extra_decls}
 
     // Size validation helpers to prevent OOB access
     static inline int validate_binary_size(ErlNifBinary* bin, size_t elem_size, size_t min_count) {
@@ -147,8 +175,15 @@ defmodule BridgeGeneratorV7 do
       flags = if should_use_dirty?(f.name), do: "ERL_NIF_DIRTY_JOB_CPU_BOUND", else: "0"
       "{\"#{f.name}\", #{length(f.args)}, nif_#{f.name}, #{flags}}"
     end)
+    extra_entries = Enum.map_join(@extra_nif_entries, ",\n    ", fn {name, arity, func, flags} ->
+      "{\"#{name}\", #{arity}, #{func}, #{flags}}"
+    end)
+    all_entries =
+      [entries, accessor_entries, extra_entries]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(",\n    ")
     
-    File.write!(@c_nif_out, "// GENERATED V7\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { \n    #{entries},\n    #{accessor_entries} \n}; \nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
+    File.write!(@c_nif_out, "// GENERATED V7\n#{preamble}\n#{wrappers}\nstatic ErlNifFunc generated_nif_funcs[] = { \n    #{all_entries} \n}; \nstatic int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { #{res_init}\nreturn 0; }")
   end
 
   defp generate_accessor_c(struct_type, field_name, field_type, mode) do
@@ -331,6 +366,11 @@ defmodule BridgeGeneratorV7 do
       "@doc \"Calls C function: #{f.name}\"\ndef #{f.name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
     end)
 
+    extra_defs = Enum.map_join(@extra_elixir_defs, "\n", fn {name, args} ->
+      args = Enum.map_join(args, ", ", fn arg -> "_#{arg}" end)
+      "@doc \"Calls C function: #{name}\"\ndef #{name}(#{args}), do: :erlang.nif_error(:nif_not_loaded)"
+    end)
+
     accessor_defs = Enum.map_join(@struct_fields, "\n", fn {struct_type, fields} ->
       Enum.map_join(fields, "\n", fn {field_name, _, _} ->
         "def get_#{struct_type}_#{field_name}(_res, _size \\\\ 0), do: :erlang.nif_error(:nif_not_loaded)"
@@ -395,7 +435,7 @@ Returns: 32-byte hash binary
 def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
 """
 
-    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    path = :code.priv_dir(:merkle_db) |> Path.join(\"merkle_nif\") |> String.to_charlist()\n    :erlang.load_nif(path, 0)\n  end\n#{defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
+    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    priv_dir =\n      case :code.priv_dir(:merkle_db) do\n        {:error, _} ->\n          Path.expand(\"../../priv\", __DIR__)\n        dir ->\n          List.to_string(dir)\n      end\n\n    path = Path.join(priv_dir, \"merkle_nif\") |> String.to_charlist()\n\n    case :erlang.load_nif(path, 0) do\n      :ok -> :ok\n      {:error, {:already_loaded, _}} -> :ok\n      {:error, reason} -> {:error, reason}\n    end\n  end\n#{defs}\n\n#{extra_defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
   end
 end
 

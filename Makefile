@@ -2,12 +2,15 @@
 
 # Paths
 NIF_SRC = native/merkle_nif.c
+BLAKE3_NIF_SRC = native/blake3_nif.c
 ASM_DIR = native/fp_lib/src/asm
 PRIV_DIR = priv
 DLL_OUT = $(PRIV_DIR)/merkle_nif.dll
+BLAKE3_DLL_OUT = $(PRIV_DIR)/blake3_nif.dll
 
 # Compiler Flags
-CFLAGS = -O3 -std=c11 -Wall -shared
+CFLAGS = -O3 -std=c11 -Wall -mavx2
+LDFLAGS = -shared
 # Includes for Erlang NIF headers and the library headers
 INCLUDES = -I"$(ERL_EI_INCLUDE_DIR)" -Inative -Inative/fp_lib/include
 
@@ -95,6 +98,9 @@ C_LIB_OBJS = \
     native/blake3_sse2.obj \
     native/blake3_sse41.obj
 
+# BLAKE3 temporarily disabled due to GCC compilation issues
+# Once resolved, add native/fp_blake3.obj and $(BLAKE3_DLL_OUT) target
+
 all: $(PRIV_DIR) $(DLL_OUT)
 
 $(PRIV_DIR):
@@ -119,7 +125,15 @@ native/%.obj: native/fp_lib/vendor/%.c
 
 # Link C NIF + ASM Objects + C Lib Objects into DLL
 $(DLL_OUT): $(ASM_OBJS) $(C_LIB_OBJS) $(NIF_SRC)
-	gcc $(CFLAGS) $(INCLUDES) -o $(DLL_OUT) $(NIF_SRC) $(ASM_OBJS) $(C_LIB_OBJS)
+	gcc $(CFLAGS) $(LDFLAGS) $(INCLUDES) -o $(DLL_OUT) $(NIF_SRC) $(ASM_OBJS) $(C_LIB_OBJS)
+
+# Compile fp_blake3.c
+native/fp_blake3.obj: native/fp_lib/src/fp_blake3.c
+	gcc -O3 -std=c11 -Wall -mavx2 $(INCLUDES) -c $< -o $@
+
+# Build BLAKE3 NIF DLL
+$(BLAKE3_DLL_OUT): native/fp_blake3.obj $(BLAKE3_NIF_SRC)
+	gcc $(CFLAGS) $(LDFLAGS) $(INCLUDES) -o $(BLAKE3_DLL_OUT) $(BLAKE3_NIF_SRC) native/fp_blake3.obj
 
 clean:
 	del native\*.obj

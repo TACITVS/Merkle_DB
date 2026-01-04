@@ -1,8 +1,21 @@
 defmodule MerkleDb.ASM do
   @on_load :load_nifs
   def load_nifs do
-    path = :code.priv_dir(:merkle_db) |> Path.join("merkle_nif") |> String.to_charlist()
-    :erlang.load_nif(path, 0)
+    priv_dir =
+      case :code.priv_dir(:merkle_db) do
+        {:error, _} ->
+          Path.expand("../../priv", __DIR__)
+        dir ->
+          List.to_string(dir)
+      end
+
+    path = Path.join(priv_dir, "merkle_nif") |> String.to_charlist()
+
+    case :erlang.load_nif(path, 0) do
+      :ok -> :ok
+      {:error, {:already_loaded, _}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 @doc "Calls C function: fp_concat_i64"
 def fp_concat_i64(_input_a, _input_b, _size_output, _len_a, _len_b), do: :erlang.nif_error(:nif_not_loaded)
@@ -544,6 +557,15 @@ def fp_zip_add_u8(_a, _b, _size_out, _n), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_zip_with_index_i64"
 def fp_zip_with_index_i64(_input, _size_output, _n), do: :erlang.nif_error(:nif_not_loaded)
 
+@doc "Calls C function: fp_job_start"
+def fp_job_start(_op, _args, _opts), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_job_status"
+def fp_job_status(_job), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_job_result"
+def fp_job_result(_job), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_job_cancel"
+def fp_job_cancel(_job), do: :erlang.nif_error(:nif_not_loaded)
+
 # --- Struct Accessors ---
 def get_KMeansResult_centroids(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
 def get_KMeansResult_assignments(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
@@ -606,49 +628,5 @@ input: binary data to hash
 Returns: 32-byte hash binary
 """
 def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
-
-# --- Quantization Kernels ---
-
-@doc """
-Quantize float64 binary to uint8 binary.
-out[i] = (in[i] - min_val) * inv_scale
-
-input: float64 binary
-min_val: float
-inv_scale: float (1.0 / scale)
-
-Returns: uint8 binary
-"""
-def fp_quantize_f64_to_u8(_input, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
-
-@doc """
-Gemv for quantized data.
-Computes dot product of u8 columns with a scaled f64 query vector + bias.
-
-columns: tuple of u8 binaries
-scaled_query: f64 binary
-bias: float
-count: integer
-dim: integer
-
-Returns: scores binary (f64)
-"""
-def fp_query_gemv_quantized(_columns, _scaled_query, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
-
-# --- HNSW Indexing ---
-
-@doc "Create native HNSW index resource"
-def fp_hnsw_create(_dim, _M, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
-
-@doc "Insert vector into HNSW index"
-def fp_hnsw_insert(_hnsw_res, _vector_idx, _vector_bin, _columns, _count), do: :erlang.nif_error(:nif_not_loaded)
-
-@doc "Search HNSW index"
-def fp_hnsw_search(_hnsw_res, _query_bin, _k, _ef_search, _columns, _count), do: :erlang.nif_error(:nif_not_loaded)
-
-# --- Sparse Vectors ---
-
-@doc "Sparse dot product between two vectors (indices must be sorted)"
-def fp_sparse_dotp(_ind_a, _val_a, _ind_b, _val_b), do: :erlang.nif_error(:nif_not_loaded)
 
 end

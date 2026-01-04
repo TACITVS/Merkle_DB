@@ -417,7 +417,7 @@ defmodule MerkleDb.Tree do
   Get tree statistics.
   """
   def stats(%__MODULE__{} = tree) do
-    %{
+    %{ 
       count: tree.count,
       active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
       dimensions: tree.dim,
@@ -431,23 +431,17 @@ defmodule MerkleDb.Tree do
       sparse_vector_count: map_size(tree.sparse_vectors || %{})
     }
   end
-  @doc """
-  Convert columnar storage to row-major binary format.
-  Used by KMeans and PCA which expect row-major data.
-  """
-  def flatten(%__MODULE__{count: 0}), do: <<>>
-  def flatten(%__MODULE__{columns: nil}), do: <<>>
-  def flatten(%__MODULE__{columns: columns, count: count, dim: dim}) do
-    column_lists = 
-      for d <- 0..(dim - 1) do
-        col_bin = elem(columns, d)
-        for <<x::little-float-size(64) <- col_bin>>, do: x
-      end
 
-    for row_idx <- 0..(count - 1), into: <<>> do
-      for col_idx <- 0..(dim - 1), into: <<>> do
-        val = column_lists |> Enum.at(col_idx) |> Enum.at(row_idx)
-        <<val::little-float-size(64)>>
+  @doc """
+  Flatten columnar storage into row-major binary (f64).
+  """
+  def flatten(%__MODULE__{columns: nil}), do: <<>>
+  def flatten(%__MODULE__{count: 0}), do: <<>>
+  def flatten(%__MODULE__{count: count, dim: dim} = tree) when count > 0 and dim > 0 do
+    for i <- 0..(count - 1), into: <<>> do
+      for d <- 0..(dim - 1), into: <<>> do
+        col = elem(tree.columns, d)
+        binary_part(col, i * 8, 8)
       end
     end
   end

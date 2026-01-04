@@ -37,7 +37,7 @@ defmodule MerkleDb.TelemetryAggregator do
 
   @impl true
   def init(_) do
-    # Attach to telemetry events
+    # Attach to telemetry events using MFA tuple to avoid local function warning
     :telemetry.attach_many(
       "aggregator-handler",
       [
@@ -45,7 +45,7 @@ defmodule MerkleDb.TelemetryAggregator do
         [:merkle_db, :cache, :hit],
         [:merkle_db, :cache, :miss]
       ],
-      &handle_telemetry_event/4,
+      &__MODULE__.handle_telemetry_event/4,
       nil
     )
 

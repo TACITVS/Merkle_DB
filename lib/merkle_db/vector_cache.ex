@@ -5,6 +5,7 @@ defmodule MerkleDb.VectorCache do
   """
 
   use GenServer
+  alias MerkleDb.Telemetry
 
   @table_name :merkle_vector_cache
   @max_cache_size 10_000  # Maximum cached entries
@@ -27,8 +28,10 @@ defmodule MerkleDb.VectorCache do
   def get_or_compute(key, compute_fn) do
     case lookup(key) do
       {:ok, value} ->
+        Telemetry.emit([:merkle_db, :cache, :hit])
         value
       :miss ->
+        Telemetry.emit([:merkle_db, :cache, :miss])
         value = compute_fn.()
         put(key, value)
         value

@@ -1,9 +1,9 @@
 defmodule MerkleDb.Query do
   @moduledoc """
-  Vector query execution with IVF indexing and parallel search.
+  Vector query execution with IVF indexing, parallel search, and payload filtering.
   """
 
-  alias MerkleDb.{Tree, ASM, VectorCache}
+  alias MerkleDb.{Tree, ASM, Filter, PayloadStore, Telemetry, VectorCache}
 
   @doc """
   Execute a query against the tree.
@@ -33,22 +33,39 @@ defmodule MerkleDb.Query do
   - {:where, filters}: Filter by metadata
   """
   def execute(%Tree{} = tree, query) do
-    case query do
-      [:knn, query_vec, k, threshold | opts] ->
-        if tree.count == 0, do: [], else: do_knn(tree, query_vec, k, threshold, opts)
+    execute_with_telemetry(tree, query, fn ->
+      case query do
+        [:knn, query_vec, k, threshold | opts] ->
+          if tree.count == 0, do: [], else: do_knn(tree, query_vec, k, threshold, opts)
 
-      [:range, query_vec, min_sim, max_sim | opts] ->
-        if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
+        [:range, query_vec, min_sim, max_sim | opts] ->
+          if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
 
-      [:sparse, sparse_query, k, threshold] ->
-        if tree.count == 0, do: [], else: do_sparse(tree, sparse_query, k, threshold)
+        [:sparse, sparse_query, k, threshold] ->
+          if tree.count == 0, do: [], else: do_sparse(tree, sparse_query, k, threshold)
 
-      [:hybrid, query_vec, sparse_query, k, threshold | opts] ->
-        if tree.count == 0, do: [], else: do_hybrid(tree, query_vec, sparse_query, k, threshold, opts)
+        [:hybrid, query_vec, sparse_query, k, threshold | opts] ->
+          if tree.count == 0, do: [], else: do_hybrid(tree, query_vec, sparse_query, k, threshold, opts)
 
-      _ ->
-        {:error, :unsupported_query}
+        _ ->
+          {:error, :unsupported_query}
+      end
+    end)
+  end
+
+  defp execute_with_telemetry(_tree, query, fun) do
+    # Extract basic info for telemetry
+    {type, k, threshold} = case query do
+      [t, _, k, th | _] -> {t, k, th}
+      _ -> {:unknown, 0, 0}
     end
+
+    Telemetry.span([:merkle_db, :query, :execute], %{type: type, k: k, threshold: threshold}, fn ->
+      result = fun.()
+      # Handle potential error tuple result
+      count = if is_list(result), do: length(result), else: 0
+      {result, %{result_count: count}}
+    end)
   end
 
   defp do_sparse(tree, sparse_query, k, threshold) do
