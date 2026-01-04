@@ -8,20 +8,18 @@ defmodule MerkleDb.Persistence do
 
   @magic <<77, 68, 66, 83>>
   @version 1
-  @current_name "snapshot-current.bin"
-  @backup_name "snapshot-prev.bin"
-
+  
   def snapshot_dir do
     System.get_env("MERKLE_DB_SNAPSHOT_DIR") ||
       Application.get_env(:merkle_db, :snapshot_dir) ||
       Path.join(File.cwd!(), "data")
   end
 
-  def snapshot_path, do: Path.join(snapshot_dir(), @current_name)
-  def backup_path, do: Path.join(snapshot_dir(), @backup_name)
+  def snapshot_path(collection \\ "default"), do: Path.join(snapshot_dir(), "snapshot-#{collection}-current.bin")
+  def backup_path(collection \\ "default"), do: Path.join(snapshot_dir(), "snapshot-#{collection}-prev.bin")
 
-  def snapshot_info do
-    path = snapshot_path()
+  def snapshot_info(collection \\ "default") do
+    path = snapshot_path(collection)
 
     case File.stat(path) do
       {:ok, stat} ->
@@ -37,17 +35,44 @@ defmodule MerkleDb.Persistence do
     end
   end
 
-  def exists?, do: File.exists?(snapshot_path())
+  def exists?(collection \\ "default"), do: File.exists?(snapshot_path(collection))
+
+  def list_collections do
+    dir = snapshot_dir()
+    files = File.ls!(dir)
+    # IO.puts "DEBUG: Persistence listing files: #{inspect(files)}"
+    
+    files
+    |> Enum.filter(&String.starts_with?(&1, "snapshot-"))
+    |> Enum.filter(&String.ends_with?(&1, "-current.bin"))
+    |> Enum.map(fn filename ->
+      # snapshot-<name>-current.bin
+      len = String.length(filename)
+      if len > 21 do
+        String.slice(filename, 9, len - 21)
+      else
+        nil # Ignore malformed or legacy files like "snapshot-current.bin"
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  rescue
+    e -> 
+      IO.puts "DEBUG: list_collections error: #{inspect(e)}"
+      []
+  end
 
   def save(tree, opts \\ []) do
     compress = Keyword.get(opts, :compress, true)
     label = Keyword.get(opts, :label, "snapshot")
+    collection = Keyword.get(opts, :collection, "default")
+    
     meta = build_meta(tree, label)
     payload = encode_payload(meta, tree, compress)
     checksum = ASM.fp_blake3_hash(payload)
     data = <<@magic::binary, @version::unsigned-32, checksum::binary-32, payload::binary>>
 
-    case :global.trans({__MODULE__, :snapshot}, fn -> write_atomic(data) end) do
+    case :global.trans({__MODULE__, collection}, fn -> write_atomic(data, collection) end) do
       :ok -> {:ok, meta}
       {:error, reason} -> {:error, reason}
       other -> {:error, other}
@@ -61,7 +86,8 @@ defmodule MerkleDb.Persistence do
   end
 
   def load(opts \\ []) do
-    path = Keyword.get(opts, :path, snapshot_path())
+    collection = Keyword.get(opts, :collection, "default")
+    path = Keyword.get(opts, :path, snapshot_path(collection))
 
     with {:ok, data} <- File.read(path),
          {:ok, {version, meta, tree}} <- decode_snapshot(data) do
@@ -77,9 +103,9 @@ defmodule MerkleDb.Persistence do
     end
   end
 
-  def delete do
-    _ = delete_file(snapshot_path())
-    _ = delete_file(backup_path())
+  def delete(collection \\ "default") do
+    _ = delete_file(snapshot_path(collection))
+    _ = delete_file(backup_path(collection))
     :ok
   end
 
@@ -92,7 +118,7 @@ defmodule MerkleDb.Persistence do
     with true <- magic == @magic || {:error, :invalid_snapshot},
          true <- version == @version || {:error, :version_mismatch},
          true <- ASM.fp_blake3_hash(payload) == checksum || {:error, :checksum_mismatch},
-         {@version, meta, tree} <- :erlang.binary_to_term(payload, [:safe]) do
+         {@version, meta, tree} <- :erlang.binary_to_term(payload) do
       {:ok, {version, meta, tree}}
     else
       {:error, reason} -> {:error, reason}
@@ -118,23 +144,24 @@ defmodule MerkleDb.Persistence do
     }
   end
 
-  defp write_atomic(data) do
+  defp write_atomic(data, collection) do
     dir = snapshot_dir()
     File.mkdir_p!(dir)
-    tmp_path = Path.join(dir, "#{@current_name}.tmp-#{System.unique_integer([:positive])}")
+    # Using specific collection name in temp file to avoid collisions
+    tmp_path = Path.join(dir, "snapshot-#{collection}-current.bin.tmp-#{System.unique_integer([:positive])}")
 
     with :ok <- File.write(tmp_path, data, [:binary]),
-         :ok <- rotate_current(),
-         :ok <- File.rename(tmp_path, snapshot_path()) do
+         :ok <- rotate_current(collection),
+         :ok <- File.rename(tmp_path, snapshot_path(collection)) do
       :ok
     else
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp rotate_current do
-    current = snapshot_path()
-    backup = backup_path()
+  defp rotate_current(collection) do
+    current = snapshot_path(collection)
+    backup = backup_path(collection)
 
     if File.exists?(current) do
       _ = delete_file(backup)

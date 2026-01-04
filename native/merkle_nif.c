@@ -291,7 +291,31 @@ static ERL_NIF_TERM nif_fp_query_gemv_quantized(ErlNifEnv* env, int argc, const 
     return enif_make_binary(env, &scores_bin);
 }
 
-// --- HNSW NIF WRAPPERS ---
+static ERL_NIF_TERM nif_fp_sparse_dotp(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    // argv[0]: indices_a, argv[1]: values_a
+    // argv[2]: indices_b, argv[3]: values_b
+
+    ErlNifBinary ind_a, val_a, ind_b, val_b;
+
+    if (!enif_inspect_binary(env, argv[0], &ind_a)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &val_a)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[2], &ind_b)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[3], &val_b)) return enif_make_badarg(env);
+
+    size_t len_a = ind_a.size / 4;
+    size_t len_b = ind_b.size / 4;
+
+    double dot = fp_sparse_dotp_f64(
+        (const int32_t*)ind_a.data,
+        (const double*)val_a.data,
+        len_a,
+        (const int32_t*)ind_b.data,
+        (const double*)val_b.data,
+        len_b
+    );
+
+    return enif_make_double(env, dot);
+}
 
 static ERL_NIF_TERM nif_fp_hnsw_create(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     int dim, M, ef_construction;
@@ -429,6 +453,7 @@ static ErlNifFunc all_nif_funcs[] = {
     {"fp_query_topk", 4, nif_fp_query_topk, 0},
     {"fp_quantize_f64_to_u8", 3, nif_fp_quantize_f64_to_u8, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_query_gemv_quantized", 5, nif_fp_query_gemv_quantized, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_sparse_dotp", 4, nif_fp_sparse_dotp, 0},
     {"fp_hnsw_create", 4, nif_fp_hnsw_create, 0},
     {"fp_hnsw_insert", 5, nif_fp_hnsw_insert, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_hnsw_search", 6, nif_fp_hnsw_search, ERL_NIF_DIRTY_JOB_CPU_BOUND},

@@ -1,3 +1,13 @@
+defmodule MerkleDb.SparseVector do
+  @moduledoc """
+  Sparse vector representation.
+  - indices: binary of int32 indices
+  - values: binary of float64 values
+  - dim: total logical dimension
+  """
+  defstruct [:indices, :values, :dim]
+end
+
 defmodule MerkleDb.Tree do
   @moduledoc """
   COLUMNAR STORAGE: A structure optimized for AXPY batch processing.
@@ -7,13 +17,15 @@ defmodule MerkleDb.Tree do
   - tombstones: MapSet of deleted indices.
   - metadata: Map from Index -> %{field => value}.
   - quantized: Optional Int8 scalar quantization data.
+  - hnsw: Optional HNSW index resource.
+  - sparse_vectors: Map from Index -> %SparseVector{}.
   - count: Total number of vectors.
   - dim: Number of dimensions.
   - centroids: IVF index centroids (optional).
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -43,6 +55,7 @@ defmodule MerkleDb.Tree do
       metadata: %{},
       quantized: nil,
       hnsw: nil,
+      sparse_vectors: %{},
       count: 0,
       dim: 0,
       centroids: nil,
@@ -69,6 +82,7 @@ defmodule MerkleDb.Tree do
     |> ensure_metadata()
     |> ensure_quantized()
     |> ensure_hnsw()
+    |> ensure_sparse()
   end
 
   defp ensure_tombstones(%{tombstones: nil} = tree), do: %{tree | tombstones: MapSet.new()}
@@ -82,6 +96,9 @@ defmodule MerkleDb.Tree do
 
   defp ensure_hnsw(%{hnsw: nil} = tree), do: %{tree | hnsw: nil}
   defp ensure_hnsw(tree), do: tree
+
+  defp ensure_sparse(%{sparse_vectors: nil} = tree), do: %{tree | sparse_vectors: %{}}
+  defp ensure_sparse(tree), do: tree
 
   defp ensure_key_index(%{key_index: nil} = tree) do
     new_key_index = 
@@ -156,6 +173,40 @@ defmodule MerkleDb.Tree do
     end)
     
     %{tree | hnsw: hnsw_res, generation: tree.generation + 1}
+  end
+
+  @doc """
+  Add a sparse vector representation for an existing vector ID.
+  - key: database key (must already exist)
+  - pairs: list of {dimension_index, value}
+  - dim: total logical dimension
+  """
+  def insert_sparse(tree, key, pairs, dim) do
+    with {:ok, idx} <- find_vector_index(tree, key) do
+      # Sort pairs by index (required for native intersection kernel)
+      sorted = Enum.sort_by(pairs, fn {i, _v} -> i end)
+      
+      indices_bin = for {i, _v} <- sorted, into: <<>>, do: <<i::little-signed-32>>
+      values_bin = for {_i, v} <- sorted, into: <<>>, do: <<v::little-float-64>>
+      
+      sparse_vec = %MerkleDb.SparseVector{
+        indices: indices_bin,
+        values: values_bin,
+        dim: dim
+      }
+      
+      new_sparse_vectors = Map.put(tree.sparse_vectors, idx, sparse_vec)
+      %{tree | sparse_vectors: new_sparse_vectors, generation: tree.generation + 1}
+    else
+      {:error, :not_found} -> raise ArgumentError, "Key not found: #{key}"
+    end
+  end
+
+  defp find_vector_index(tree, key) do
+    case Map.get(tree.key_index, key) do
+      nil -> {:error, :not_found}
+      idx -> {:ok, idx}
+    end
   end
 
   @doc """
@@ -343,48 +394,43 @@ defmodule MerkleDb.Tree do
       keys_mb = (count * 50) / (1024 * 1024)
       key_index_mb = (count * 50) / (1024 * 1024)
       
-      metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
-      metadata_mb = (metadata_count * 100) / (1024 * 1024)
-      
-      tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
-      tombstones_mb = (tombstones_count * 32) / (1024 * 1024)
-      
-      quantized_mb = 
-        if tree.quantized do
-          (count * dim) / (1024 * 1024)
-        else
-          0
-        end
-  
-      hnsw_mb = 
-        if tree.hnsw do
-          # Rough estimate: nodes * avg_edges * 4 bytes + map overhead
-          # Assuming M=16, average neighbors ~16
-          (count * 16 * 8) / (1024 * 1024) 
-        else
-          0
-        end
-      
-      Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb + hnsw_mb, 2)
-    end
-  
-    @doc """
-    Get tree statistics.
-    """
-    def stats(%__MODULE__{} = tree) do
-      %{
-        count: tree.count,
-        active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
-        dimensions: tree.dim,
-        memory_mb: estimate_memory_mb(tree),
-        has_ivf_index: tree.centroids != nil,
-        cluster_count: map_size(tree.clusters),
-        tombstones: MapSet.size(tree.tombstones || MapSet.new()),
-        metadata_entries: map_size(tree.metadata || %{}),
-        quantized: tree.quantized != nil,
-        has_hnsw_index: tree.hnsw != nil
-      }
-    end
+    metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
+    metadata_mb = (metadata_count * 100) / (1024 * 1024)
+    tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
+    tombstones_mb = (tombstones_count * 32) / (1024 * 1024)
+    quantized_mb = if tree.quantized, do: (count * dim) / (1024 * 1024), else: 0
+    
+    hnsw_mb = 
+      if tree.hnsw do
+        (count * 16 * 8) / (1024 * 1024) 
+      else
+        0
+      end
+
+    sparse_count = if tree.sparse_vectors, do: map_size(tree.sparse_vectors), else: 0
+    sparse_mb = (sparse_count * 200) / (1024 * 1024) # Approximate size per sparse vector
+    
+    Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb + hnsw_mb + sparse_mb, 2)
+  end
+
+  @doc """
+  Get tree statistics.
+  """
+  def stats(%__MODULE__{} = tree) do
+    %{
+      count: tree.count,
+      active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
+      dimensions: tree.dim,
+      memory_mb: estimate_memory_mb(tree),
+      has_ivf_index: tree.centroids != nil,
+      cluster_count: map_size(tree.clusters),
+      tombstones: MapSet.size(tree.tombstones || MapSet.new()),
+      metadata_entries: map_size(tree.metadata || %{}),
+      quantized: tree.quantized != nil,
+      has_hnsw_index: tree.hnsw != nil,
+      sparse_vector_count: map_size(tree.sparse_vectors || %{})
+    }
+  end
   @doc """
   Convert columnar storage to row-major binary format.
   Used by KMeans and PCA which expect row-major data.

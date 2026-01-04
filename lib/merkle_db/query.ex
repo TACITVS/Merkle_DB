@@ -40,9 +40,73 @@ defmodule MerkleDb.Query do
       [:range, query_vec, min_sim, max_sim | opts] ->
         if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
 
+      [:sparse, sparse_query, k, threshold] ->
+        if tree.count == 0, do: [], else: do_sparse(tree, sparse_query, k, threshold)
+
+      [:hybrid, query_vec, sparse_query, k, threshold | opts] ->
+        if tree.count == 0, do: [], else: do_hybrid(tree, query_vec, sparse_query, k, threshold, opts)
+
       _ ->
         {:error, :unsupported_query}
     end
+  end
+
+  defp do_sparse(tree, sparse_query, k, threshold) do
+    # 1. Prepare query
+    q = to_sparse_struct(sparse_query)
+    tombstones = tree.tombstones || MapSet.new()
+
+    # 2. Linear scan (optimized via NIF)
+    # Note: For production, an inverted index for sparse vectors would be better.
+    results = 
+      tree.sparse_vectors
+      |> Enum.reject(fn {idx, _vec} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.map(fn {idx, vec} ->
+        score = ASM.fp_sparse_dotp(q.indices, q.values, vec.indices, vec.values)
+        {idx, score}
+      end)
+      |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+      |> Enum.sort_by(fn {_idx, score} -> score end, :desc)
+      |> Enum.take(k)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+    
+    results
+  end
+
+  defp do_hybrid(tree, query_vec, sparse_query, k, threshold, opts) do
+    alpha = Keyword.get(opts, :alpha, 0.5) # Weight for dense score
+    
+    # 1. Get dense results
+    dense_results = do_knn(tree, query_vec, k * 2, 0.0, opts)
+    
+    # 2. Get sparse results
+    sparse_results = do_sparse(tree, sparse_query, k * 2, 0.0)
+    
+    # 3. Combine scores (RRF or weighted sum)
+    # We use weighted sum here.
+    dense_map = Map.new(dense_results)
+    sparse_map = Map.new(sparse_results)
+    
+    all_keys = MapSet.union(MapSet.new(Map.keys(dense_map)), MapSet.new(Map.keys(sparse_map)))
+    
+    all_keys
+    |> Enum.map(fn key ->
+      d_score = Map.get(dense_map, key, 0.0)
+      s_score = Map.get(sparse_map, key, 0.0)
+      score = alpha * d_score + (1.0 - alpha) * s_score
+      {key, score}
+    end)
+    |> Enum.filter(fn {_key, score} -> score >= threshold end)
+    |> Enum.sort_by(fn {_key, score} -> score end, :desc)
+    |> Enum.take(k)
+  end
+
+  defp to_sparse_struct(%MerkleDb.SparseVector{} = sv), do: sv
+  defp to_sparse_struct({pairs, dim}) when is_list(pairs) do
+    sorted = Enum.sort_by(pairs, fn {i, _v} -> i end)
+    ind = for {i, _v} <- sorted, into: <<>>, do: <<i::little-signed-32>>
+    val = for {_i, v} <- sorted, into: <<>>, do: <<v::little-float-64>>
+    %MerkleDb.SparseVector{indices: ind, values: val, dim: dim}
   end
 
   defp do_knn(tree, query_vec, k, threshold, opts) do
@@ -265,7 +329,7 @@ defmodule MerkleDb.Query do
       # Flat path: compute all scores, then native top-k selection
       # If we have a filter, we might need to look at more than just top-K
       # If NO filter, we use top-K optimization
-      if where_filter == nil do
+      if where_filter == nil and false do # DISABLE ASM FOR NOW
         search_k = trunc(k * 1.5) + 1
         scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
         {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(scores_bin, count, search_k, threshold)

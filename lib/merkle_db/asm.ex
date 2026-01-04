@@ -646,4 +646,9 @@ def fp_hnsw_insert(_hnsw_res, _vector_idx, _vector_bin, _columns, _count), do: :
 @doc "Search HNSW index"
 def fp_hnsw_search(_hnsw_res, _query_bin, _k, _ef_search, _columns, _count), do: :erlang.nif_error(:nif_not_loaded)
 
+# --- Sparse Vectors ---
+
+@doc "Sparse dot product between two vectors (indices must be sorted)"
+def fp_sparse_dotp(_ind_a, _val_a, _ind_b, _val_b), do: :erlang.nif_error(:nif_not_loaded)
+
 end

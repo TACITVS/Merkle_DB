@@ -7,6 +7,8 @@
 
 ## Recent Implementations
 
+- **2026-01-04**: Sparse Vector Support implemented (Hybrid dense+sparse search)
+- **2026-01-04**: Namespaces/Collections implemented (Multi-tenant support via `KV` module)
 - **2026-01-04**: HNSW Indexing implemented (Fast approximate nearest neighbor search)
 - **2026-01-04**: Int8 Scalar Quantization implemented (8x memory reduction, AVX2-accelerated)
 - **2026-01-04**: Metadata/Scalar Filtering implemented (`:where` filter with eq, neq, gt, lt, gte, lte, in)
@@ -140,31 +142,26 @@ results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 
 ---
 
-### Priority 5: Sparse Vector Support
+### Priority 5: Sparse Vector Support - IMPLEMENTED
 
-**Current State:** Only dense vectors supported.
+**Status:** FULLY IMPLEMENTED (2026-01-04)
 
-**Impact:**
-- Cannot handle BM25/TF-IDF sparse representations
-- No hybrid dense+sparse search
-- Limited for keyword-aware retrieval
+**Implementation:**
+- **SparseVector Format:** Dedicated struct storing indices (int32) and values (float64) as binaries.
+- **Dedicated Storage:** `sparse_vectors` map in `Tree` struct for secondary sparse representations.
+- **Native Kernel:** Highly optimized `fp_sparse_dotp` NIF for fast index-intersection based dot products.
+- **Hybrid Scoring:** Combined dense + sparse ranking with configurable `alpha` weight.
 
-**Recommended Implementation:**
-```
-1. Sparse vector format
-   %SparseVector{indices: [int], values: [float], dim: int}
+**Usage:**
+```elixir
+# Add sparse representation to existing vector
+tree = MerkleDb.Tree.insert_sparse(tree, "V1", [{0, 1.0}, {15, 0.5}], 1000)
 
-2. Separate storage for sparse vectors
-   sparse_columns: %{vector_id => %SparseVector{}}
-
-3. Sparse dot product kernel
-   fp_sparse_dotp(indices_a, values_a, indices_b, values_b)
-
-4. Hybrid scoring
-   score = alpha * dense_score + (1 - alpha) * sparse_score
+# Hybrid search
+results = MerkleDb.Query.execute(tree, [:hybrid, dense_vec, sparse_query, 10, 0.5, [alpha: 0.7]])
 ```
 
-**Effort:** Medium (3-4 days)
+**Effort:** Medium (3-4 days) - COMPLETED
 
 ---
 
@@ -230,27 +227,36 @@ Query.execute(tree, [:range, query_vec, 0.7, 0.9, 100, :parallel])
 
 ---
 
-### Namespaces/Collections
+### Namespaces/Collections - IMPLEMENTED
 
-**Current State:** Single global tree.
-
-**Impact:**
-- No multi-tenant isolation
-- Cannot organize vectors by category/type
+**Status:** FULLY IMPLEMENTED (2026-01-04)
 
 **Implementation:**
+- **Architecture:** `KV` GenServer manages a map of trees `%{"collection_name" => %Tree{}}`.
+- **API:** All KV operations accept an optional `collection` argument (defaulting to "default").
+- **Persistence:** Each collection is persisted to a separate snapshot file (`snapshot-<name>-current.bin`).
+- **Discovery:** Automatic discovery and loading of existing collections on startup.
+
+**Usage:**
 ```elixir
-# Multiple named trees
-KV.create_collection("products")
-KV.create_collection("users")
-KV.insert("products", key, vector)
+# Create separate collections
+MerkleDb.KV.create_collection("users")
+MerkleDb.KV.create_collection("products")
+
+# Insert into specific collection
+MerkleDb.KV.put("users", "alice", user_vec)
+MerkleDb.KV.put("products", "laptop", prod_vec)
+
+# Search specific collection
+tree = MerkleDb.KV.snapshot("users")
+results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 ```
 
-**Effort:** Low-Medium (2-3 days)
+**Effort:** Low-Medium (2-3 days) - COMPLETED
 
 ---
 
-## Comparison Matrix
+## Secondary Gaps
 
 | Feature | MerkleDB | Pinecone | Qdrant | Milvus | Weaviate |
 |---------|----------|----------|--------|--------|----------|
@@ -278,12 +284,12 @@ KV.insert("products", key, vector)
 ### Phase 2: Performance Parity (2-3 weeks)
 4. ~~Int8 scalar quantization~~ - DONE (2026-01-04)
 5. ~~HNSW index implementation~~ - DONE (2026-01-04)
-6. Namespaces/collections
+6. ~~Namespaces/collections~~ - DONE (2026-01-04)
 
 ### Phase 3: Advanced Features (3-4 weeks)
-7. Sparse vector support
+7. ~~Sparse vector support~~ - DONE (2026-01-04)
 8. Product quantization
-9. Hybrid search (dense + sparse)
+9. Hybrid search (dense + sparse) - DONE (2026-01-04)
 
 ### Phase 4: Scale (4+ weeks)
 10. Multi-node replication

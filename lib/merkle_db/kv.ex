@@ -4,93 +4,200 @@ defmodule MerkleDb.KV do
   """
   use GenServer
 
-  alias MerkleDb.Tree
+  alias MerkleDb.{Tree, Persistence}
 
+  # State: map of collection_name -> %Tree{}
   def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @doc "Insert a single vector with optional metadata"
-  def put(key, vector, metadata \\ %{}), do: GenServer.call(__MODULE__, {:put, key, vector, metadata})
+  def put(collection \\ "default", key, vector, metadata \\ %{}) do
+    GenServer.call(__MODULE__, {:put, collection, key, vector, metadata})
+  end
 
   @doc "Batch insert vectors with optional metadata"
-  def put_batch(key_vector_pairs), do: GenServer.call(__MODULE__, {:put_batch, key_vector_pairs})
+  def put_batch(collection \\ "default", key_vector_pairs) do
+    GenServer.call(__MODULE__, {:put_batch, collection, key_vector_pairs})
+  end
 
   @doc "Delete a key (soft delete)"
-  def delete(key), do: GenServer.call(__MODULE__, {:delete, key})
+  def delete(collection \\ "default", key) do
+    GenServer.call(__MODULE__, {:delete, collection, key})
+  end
 
-  @doc "Get current tree snapshot"
-  def snapshot, do: GenServer.call(__MODULE__, :snapshot)
+  @doc "Create a new collection"
+  def create_collection(name) do
+    GenServer.call(__MODULE__, {:create_collection, name})
+  end
+
+  @doc "Drop a collection (delete from memory and disk)"
+  def drop_collection(name) do
+    GenServer.call(__MODULE__, {:drop_collection, name})
+  end
+
+  @doc "List all available collections"
+  def list_collections do
+    GenServer.call(__MODULE__, :list_collections)
+  end
+
+  @doc "Get tree snapshot for a collection"
+  def snapshot(collection \\ "default") do
+    GenServer.call(__MODULE__, {:snapshot, collection})
+  end
 
   @doc "Replace entire tree (used by Bootstrap)"
-  def set_tree(%Tree{} = tree), do: GenServer.call(__MODULE__, {:set_tree, tree})
+  def set_tree(collection \\ "default", %Tree{} = tree) do
+    GenServer.call(__MODULE__, {:set_tree, collection, tree})
+  end
 
   @doc """
   Atomically update tree's IVF index if generation matches (optimistic locking).
-  Used by IndexBuilder to safely apply index after async computation.
-  Returns :ok | {:error, :generation_mismatch}
   """
-  def update_index(%Tree{} = new_tree, expected_generation) do
-    GenServer.call(__MODULE__, {:update_index, new_tree, expected_generation})
+  def update_index(collection \\ "default", %Tree{} = new_tree, expected_generation) do
+    GenServer.call(__MODULE__, {:update_index, collection, new_tree, expected_generation})
   end
 
   @doc "Get current tree generation"
-  def generation, do: GenServer.call(__MODULE__, :generation)
+  def generation(collection \\ "default") do
+    GenServer.call(__MODULE__, {:generation, collection})
+  end
 
   # ==================== Callbacks ====================
 
   @impl true
   def init(_) do
-    {:ok, Tree.new()}
+    # Load all existing collections from disk
+    collections = 
+      Persistence.list_collections()
+      |> Enum.reduce(%{}, fn name, acc ->
+        case Persistence.load(collection: name) do
+          {:ok, %{tree: tree}} -> Map.put(acc, name, tree)
+          _ -> acc
+        end
+      end)
+    
+    # Ensure "default" exists
+    collections = Map.put_new(collections, "default", Tree.new())
+    
+    {:ok, collections}
   end
 
-  @impl true
-  def handle_call({:put, key, vector, metadata}, _from, current_tree) do
-    new_tree = Tree.insert(current_tree, key, vector, metadata)
-    {:reply, :ok, new_tree}
-  end
+  # --- Collection Management ---
 
   @impl true
-  def handle_call({:put_batch, pairs}, _from, current_tree) do
-    new_tree = Tree.insert_batch(current_tree, pairs)
-    {:reply, :ok, new_tree}
-  end
-
-  @impl true
-  def handle_call({:delete, key}, _from, current_tree) do
-    case Tree.delete(current_tree, key) do
-      {:error, :not_found} ->
-        {:reply, {:error, :not_found}, current_tree}
-      new_tree ->
-        {:reply, :ok, new_tree}
-    end
-  end
-
-  @impl true
-  def handle_call(:snapshot, _from, current_tree) do
-    {:reply, current_tree, current_tree}
-  end
-
-  @impl true
-  def handle_call({:set_tree, new_tree}, _from, _current_tree) do
-    {:reply, :ok, new_tree}
-  end
-
-  @impl true
-  def handle_call({:update_index, new_tree, expected_generation}, _from, current_tree) do
-    if current_tree.generation == expected_generation do
-      # Apply the new index (centroids + clusters) while keeping current data
-      updated_tree = %{current_tree |
-        centroids: new_tree.centroids,
-        clusters: new_tree.clusters,
-        generation: current_tree.generation + 1
-      }
-      {:reply, :ok, updated_tree}
+  def handle_call({:create_collection, name}, _from, collections) do
+    if Map.has_key?(collections, name) do
+      {:reply, {:error, :already_exists}, collections}
     else
-      {:reply, {:error, :generation_mismatch}, current_tree}
+      new_tree = Tree.new()
+      {:reply, :ok, Map.put(collections, name, new_tree)}
     end
   end
 
   @impl true
-  def handle_call(:generation, _from, current_tree) do
-    {:reply, current_tree.generation, current_tree}
+  def handle_call({:drop_collection, name}, _from, collections) do
+    if name == "default" do
+      # Cannot drop default, but can reset it?
+      # For safety, let's just reset it to empty
+      new_collections = Map.put(collections, "default", Tree.new())
+      Persistence.delete("default")
+      {:reply, :ok, new_collections}
+    else
+      new_collections = Map.delete(collections, name)
+      Persistence.delete(name)
+      {:reply, :ok, new_collections}
+    end
+  end
+
+  @impl true
+  def handle_call(:list_collections, _from, collections) do
+    {:reply, Map.keys(collections), collections}
+  end
+
+  # --- Tree Operations ---
+
+  @impl true
+  def handle_call({:put, collection, key, vector, metadata}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      new_tree = Tree.insert(tree, key, vector, metadata)
+      # Persist async? For now sync or let caller handle save logic?
+      # Original code didn't persist on put. We assume periodic snapshotting or manual save.
+      {:reply, :ok, Map.put(collections, collection, new_tree)}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:put_batch, collection, pairs}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      new_tree = Tree.insert_batch(tree, pairs)
+      {:reply, :ok, Map.put(collections, collection, new_tree)}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:delete, collection, key}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      case Tree.delete(tree, key) do
+        {:error, :not_found} ->
+          {:reply, {:error, :not_found}, collections}
+        new_tree ->
+          {:reply, :ok, Map.put(collections, collection, new_tree)}
+      end
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:snapshot, collection}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      {:reply, tree, collections}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:set_tree, collection, new_tree}, _from, collections) do
+    # Implicitly creates collection if not exists
+    {:reply, :ok, Map.put(collections, collection, new_tree)}
+  end
+
+  @impl true
+  def handle_call({:update_index, collection, new_tree, expected_gen}, _from, collections) do
+    with {:ok, current_tree} <- get_tree(collections, collection) do
+      if current_tree.generation == expected_gen do
+        updated_tree = %{current_tree |
+          centroids: new_tree.centroids,
+          clusters: new_tree.clusters,
+          hnsw: new_tree.hnsw, # Also update HNSW if present
+          generation: current_tree.generation + 1
+        }
+        {:reply, :ok, Map.put(collections, collection, updated_tree)}
+      else
+        {:reply, {:error, :generation_mismatch}, collections}
+      end
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:generation, collection}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      {:reply, tree.generation, collections}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  defp get_tree(collections, name) do
+    case Map.get(collections, name) do
+      nil -> {:error, :collection_not_found}
+      tree -> {:ok, tree}
+    end
   end
 end
