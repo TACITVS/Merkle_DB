@@ -575,4 +575,58 @@ def get_PCAModel_n_components(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_
 def get_PCAModel_eigenvalues(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
 def get_PCAModel_total_variance(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
 def get_PCAResult_converged(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)
+# --- Query Kernels (manually added) ---
+
+@doc """
+Single-pass columnar GEMV for vector similarity search.
+Replaces the 64-allocation loop with one NIF call.
+
+columns_tuple: tuple of dim binaries (each count*8 bytes)
+query_bin: normalized query vector (dim*8 bytes)
+count: number of vectors
+dim: dimension
+
+Returns: scores binary (count*8 bytes)
+"""
+def fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc """
+Indexed columnar GEMV for IVF search.
+Only computes scores for specified row indices - O(num_indices * dim) instead of O(count * dim).
+
+columns_tuple: tuple of dim column binaries
+query_bin: normalized query vector (dim*8 bytes)
+indices_bin: int32 array of candidate row indices
+count: total number of vectors
+dim: vector dimension
+
+Returns: scores binary (num_indices*8 bytes, in same order as indices)
+"""
+def fp_query_gemv_indexed(_columns_tuple, _query_bin, _indices_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc """
+Top-K selection from scores array.
+
+scores_bin: scores binary (count*8 bytes)
+count: number of scores
+k: number of top results
+threshold: minimum score threshold
+
+Returns: {result_count, indices_bin, scores_bin}
+  - indices_bin: int32 indices of top results
+  - scores_bin: float64 scores of top results
+"""
+def fp_query_topk(_scores_bin, _count, _k, _threshold), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- BLAKE3 Cryptographic Hash ---
+
+@doc """
+BLAKE3 cryptographic hash (3-5x faster than SHA-256).
+
+input: binary data to hash
+
+Returns: 32-byte hash binary
+"""
+def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
+
 end

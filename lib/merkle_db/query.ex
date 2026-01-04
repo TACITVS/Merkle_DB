@@ -9,81 +9,254 @@ defmodule MerkleDb.Query do
   Execute a query against the tree.
 
   ## Supported Queries
+
+  ### KNN (K-Nearest Neighbors)
   - [:knn, query_vec, k, threshold] - K-nearest neighbors with similarity threshold
   - [:knn, query_vec, k, threshold, :parallel] - Parallel IVF search across top clusters
   - [:knn, query_vec, k, threshold, :cached] - Cache-aware search
-  - [:knn, query_vec, k, threshold, filter] - KNN with payload filtering
-  - [:knn, query_vec, k, threshold, filter, :parallel] - Parallel KNN with filtering
+  - [:knn, query_vec, k, threshold, {:where, filters}] - KNN with metadata filtering
 
-  ## Filter Format
-  Filter is a list of conditions:
-      [{"field", "op", value}, ...]
+  ### Range Queries
+  - [:range, query_vec, min_sim, max_sim] - All vectors with similarity in [min_sim, max_sim]
+  - [:range, query_vec, min_sim, max_sim, :parallel] - Parallel IVF range search
+  - [:range, query_vec, min_sim, max_sim, limit] - Range with max results limit
+  - [:range, query_vec, min_sim, max_sim, {:where, filters}] - Range with metadata filtering
 
-  Supported operators: ==, !=, >, >=, <, <=, in, not_in, contains, starts_with, exists
+  ## Metadata Filtering Syntax
+  Filters is a list of conditions: `[{"field", :eq, value}, {"field", :>, value}, ...]`
+  Supported operators: :eq, :neq, :gt, :lt, :gte, :lte, :in
 
   ## Options
   - parallel: Search top N clusters in parallel (requires IVF index)
   - cached: Use VectorCache for repeated queries
+  - limit: Maximum number of results (for range queries)
+  - {:where, filters}: Filter by metadata
   """
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold]) do
-    execute_with_telemetry(tree, query_vec, k, threshold, :auto, fn ->
-      execute_knn(tree, query_vec, k, threshold)
+  def execute(%Tree{} = tree, query) do
+    execute_with_telemetry(tree, query, fn ->
+      case query do
+        [:knn, query_vec, k, threshold | opts] ->
+          if tree.count == 0, do: [], else: do_knn(tree, query_vec, k, threshold, opts)
+
+        [:range, query_vec, min_sim, max_sim | opts] ->
+          if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
+
+        [:sparse, sparse_query, k, threshold] ->
+          if tree.count == 0, do: [], else: do_sparse(tree, sparse_query, k, threshold)
+
+        [:hybrid, query_vec, sparse_query, k, threshold | opts] ->
+          if tree.count == 0, do: [], else: do_hybrid(tree, query_vec, sparse_query, k, threshold, opts)
+
+        _ ->
+          {:error, :unsupported_query}
+      end
     end)
   end
 
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, :parallel]) do
-    execute_with_telemetry(tree, query_vec, k, threshold, :parallel, fn ->
-      execute_knn_parallel(tree, query_vec, k, threshold)
+  defp execute_with_telemetry(_tree, query, fun) do
+    # Extract basic info for telemetry
+    {type, k, threshold} = case query do
+      [t, _, k, th | _] -> {t, k, th}
+      _ -> {:unknown, 0, 0}
+    end
+
+    Telemetry.span([:merkle_db, :query, :execute], %{type: type, k: k, threshold: threshold}, fn ->
+      result = fun.()
+      # Handle potential error tuple result
+      count = if is_list(result), do: length(result), else: 0
+      {result, %{result_count: count}}
     end)
   end
 
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, :cached]) do
-    execute_with_telemetry(tree, query_vec, k, threshold, :cached, fn ->
-      cache_key = {:knn, :crypto.hash(:sha256, query_vec), k, threshold}
+  defp do_sparse(tree, sparse_query, k, threshold) do
+    # 1. Prepare query
+    q = to_sparse_struct(sparse_query)
+    tombstones = tree.tombstones || MapSet.new()
 
-      VectorCache.get_or_compute(cache_key, fn ->
-        execute_knn(tree, query_vec, k, threshold)
+    # 2. Linear scan (optimized via NIF)
+    # Note: For production, an inverted index for sparse vectors would be better.
+    results = 
+      tree.sparse_vectors
+      |> Enum.reject(fn {idx, _vec} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.map(fn {idx, vec} ->
+        score = ASM.fp_sparse_dotp(q.indices, q.values, vec.indices, vec.values)
+        {idx, score}
       end)
-    end)
+      |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+      |> Enum.sort_by(fn {_idx, score} -> score end, :desc)
+      |> Enum.take(k)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+    
+    results
   end
 
-  # KNN with payload filter
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, filter])
-      when is_list(filter) do
-    execute_with_telemetry(tree, query_vec, k, threshold, :filtered, fn ->
-      execute_knn_filtered(tree, query_vec, k, threshold, filter)
+  defp do_hybrid(tree, query_vec, sparse_query, k, threshold, opts) do
+    alpha = Keyword.get(opts, :alpha, 0.5) # Weight for dense score
+    
+    # 1. Get dense results
+    dense_results = do_knn(tree, query_vec, k * 2, 0.0, opts)
+    
+    # 2. Get sparse results
+    sparse_results = do_sparse(tree, sparse_query, k * 2, 0.0)
+    
+    # 3. Combine scores (RRF or weighted sum)
+    # We use weighted sum here.
+    dense_map = Map.new(dense_results)
+    sparse_map = Map.new(sparse_results)
+    
+    all_keys = MapSet.union(MapSet.new(Map.keys(dense_map)), MapSet.new(Map.keys(sparse_map)))
+    
+    all_keys
+    |> Enum.map(fn key ->
+      d_score = Map.get(dense_map, key, 0.0)
+      s_score = Map.get(sparse_map, key, 0.0)
+      score = alpha * d_score + (1.0 - alpha) * s_score
+      {key, score}
     end)
+    |> Enum.filter(fn {_key, score} -> score >= threshold end)
+    |> Enum.sort_by(fn {_key, score} -> score end, :desc)
+    |> Enum.take(k)
   end
 
-  # Parallel KNN with payload filter
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, filter, :parallel])
-      when is_list(filter) do
-    execute_with_telemetry(tree, query_vec, k, threshold, :filtered_parallel, fn ->
-      execute_knn_parallel_filtered(tree, query_vec, k, threshold, filter)
+  defp to_sparse_struct(%MerkleDb.SparseVector{} = sv), do: sv
+  defp to_sparse_struct({pairs, dim}) when is_list(pairs) do
+    sorted = Enum.sort_by(pairs, fn {i, _v} -> i end)
+    ind = for {i, _v} <- sorted, into: <<>>, do: <<i::little-signed-32>>
+    val = for {_i, v} <- sorted, into: <<>>, do: <<v::little-float-64>>
+    %MerkleDb.SparseVector{indices: ind, values: val, dim: dim}
+  end
+
+  defp do_knn(tree, query_vec, k, threshold, opts) do
+    where_filter = extract_where(opts)
+    parallel = :parallel in opts
+    cached = :cached in opts
+
+    if cached do
+      cache_key = {:knn, ASM.fp_blake3_hash(query_vec), k, threshold, where_filter}
+      VectorCache.get_or_compute(cache_key, fn ->
+        do_knn(tree, query_vec, k, threshold, List.delete(opts, :cached))
+      end)
+    else
+      cond do
+        parallel and tree.centroids != nil ->
+          execute_ivf_parallel(tree, query_vec, k, threshold, 5, where_filter)
+
+        tree.centroids != nil and where_filter == nil ->
+          execute_ivf(tree, query_vec, k, threshold)
+
+        tree.hnsw != nil and where_filter == nil ->
+          # Use HNSW if available and no filter
+          execute_hnsw(tree, query_vec, k, threshold)
+
+        tree.quantized != nil and where_filter == nil ->
+          # Use quantized search if available and no filter
+          execute_quantized(tree, query_vec, k, threshold)
+
+        true ->
+          execute_flat(tree, query_vec, k, threshold, nil, where_filter)
+      end
+    end
+  end
+
+  # ==================== HNSW Search ====================
+
+  defp execute_hnsw(tree, query_vec, k, threshold) do
+    # Normalize query
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_bin = if q_mag == 0, do: query_vec, else: (for q <- q_floats, into: <<>>, do: <<q/q_mag::little-float-64>>)
+
+    ef_search = max(k * 2, 32)
+    
+    # 1. Call NIF
+    {result_count, indices_bin, scores_bin} = 
+      ASM.fp_hnsw_search(tree.hnsw, q_norm_bin, k, ef_search, tree.columns, tree.count)
+
+    if result_count == 0 do
+      []
+    else
+      indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+      scores = for <<s::little-float-size(64) <- scores_bin>>, do: s
+      tombstones = tree.tombstones || MapSet.new()
+
+      Enum.zip(indices, scores)
+      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+    end
+  end
+
+  # ==================== Quantized Search ====================
+
+  defp execute_quantized(tree, query_vec, k, threshold) do
+    count = tree.count
+    dim = tree.dim
+    tombstones = tree.tombstones || MapSet.new()
+    %{columns: q_cols, params: q_params} = tree.quantized
+
+    # 1. Normalize and parse query
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+
+    # 2. Pre-process query for quantized dot product
+    # Dot product logic:
+    # float_val = (uint8_val * scale) + min
+    # sum(float_val_d * q_d) = sum(((uint8_val_d * scale_d) + min_d) * q_d)
+    #                        = sum(uint8_val_d * (scale_d * q_d) + (min_d * q_d))
+    #                        = sum(uint8_val_d * scaled_q_d) + sum(min_d * q_d)
+    # where scaled_q_d = q_d / inv_scale_d
+    #       bias = sum(min_d * q_d)
+
+    {scaled_q_list, bias} = 
+      Enum.zip(q_norm_list, q_params)
+      |> Enum.reduce({[], 0.0}, fn {q_d, {min_d, inv_scale_d}}, {s_acc, b_acc} ->
+        scale_d = 1.0 / inv_scale_d
+        {[q_d * scale_d | s_acc], b_acc + (min_d * q_d)}
+      end)
+    
+    scaled_q_bin = for s <- Enum.reverse(scaled_q_list), into: <<>>, do: <<s::little-float-64>>
+
+    # 3. Call NIF
+    scores_bin = ASM.fp_query_gemv_quantized(q_cols, scaled_q_bin, bias, count, dim)
+
+    # 4. Top-K selection (same as flat)
+    {result_count, indices_bin, result_scores_bin} =
+      ASM.fp_query_topk(scores_bin, count, k, threshold)
+
+    if result_count == 0 do
+      []
+    else
+      indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+      scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
+
+      Enum.zip(indices, scores)
+      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.take(k)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+    end
+  end
+
+  defp do_range(tree, query_vec, min_sim, max_sim, opts) do
+    where_filter = extract_where(opts)
+    parallel = :parallel in opts
+    limit = Enum.find(opts, &is_integer/1)
+
+    if parallel and tree.centroids != nil do
+      execute_range_parallel(tree, query_vec, min_sim, max_sim, limit, 10, where_filter)
+    else
+      execute_range(tree, query_vec, min_sim, max_sim, limit, where_filter)
+    end
+  end
+
+  defp extract_where(opts) do
+    Enum.find_value(opts, fn
+      {:where, filters} -> filters
+      _ -> nil
     end)
   end
 
   # ==================== IVF Search (Single Cluster) ====================
-
-  defp execute_knn(tree, query_vec, k, threshold) do
-    if tree.count == 0, do: []
-
-    if tree.centroids do
-      execute_ivf(tree, query_vec, k, threshold)
-    else
-      execute_flat(tree, query_vec, k, threshold)
-    end
-  end
-
-  defp execute_knn_parallel(tree, query_vec, k, threshold) do
-    if tree.count == 0, do: []
-
-    if tree.centroids do
-      execute_ivf_parallel(tree, query_vec, k, threshold)
-    else
-      execute_flat(tree, query_vec, k, threshold)
-    end
-  end
 
   defp execute_ivf(tree, query_vec, k, threshold) do
     # 1. Find nearest centroid
@@ -95,14 +268,14 @@ defmodule MerkleDb.Query do
     indices = Map.get(tree.clusters, cluster_id, [])
 
     # 3. Perform search ONLY on these indices
-    execute_flat(tree, query_vec, k, threshold, indices)
+    execute_flat(tree, query_vec, k, threshold, indices, nil)
   end
 
   # ==================== IVF Parallel Search (Top N Clusters) ====================
 
   # Parallel IVF search across top N candidate clusters.
   # Significantly faster for high-dimensional data with good clustering.
-  defp execute_ivf_parallel(tree, query_vec, k, threshold, n_clusters \\ 5) do
+  defp execute_ivf_parallel(tree, query_vec, k, threshold, n_clusters, where_filter) do
     num_clusters = map_size(tree.clusters)
 
     # 1. Find top N nearest clusters (not just 1)
@@ -114,7 +287,7 @@ defmodule MerkleDb.Query do
       |> Task.async_stream(
         fn cluster_id ->
           indices = Map.get(tree.clusters, cluster_id, [])
-          execute_flat(tree, query_vec, k * 2, threshold, indices)  # Get more results per cluster
+          execute_flat(tree, query_vec, k * 2, threshold, indices, where_filter)  # Get more results per cluster
         end,
         max_concurrency: System.schedulers_online(),
         timeout: 10_000
@@ -132,101 +305,202 @@ defmodule MerkleDb.Query do
 
   # ==================== Flat Search (Brute Force) ====================
 
-  defp execute_flat(tree, query_vec, k, threshold, row_indices \\ nil) do
+  defp execute_flat(tree, query_vec, k, threshold, row_indices, where_filter) do
     count = tree.count
+    dim = tree.dim
+    tombstones = tree.tombstones || MapSet.new()
+
+    # Normalize query vector
     q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
     q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
-    q_norm = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+    q_norm_bin = for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(64)>>
 
-    output_size = count * 8
-    accumulator = ASM.fp_replicate_f64(output_size, count, 0.0)
+    if row_indices do
+      # IVF path: use indexed GEMV - O(num_indices * dim) instead of O(count * dim)
+      # First, filter out tombstones AND metadata from the candidate indices
+      valid_indices = 
+        row_indices 
+        |> Enum.reject(fn idx -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn idx -> matches_where?(tree, idx, where_filter) end)
 
-    final_scores_bin =
-      q_norm
+      if valid_indices == [] do
+        []
+      else
+        # Convert indices to int32 binary
+        indices_bin = for idx <- valid_indices, into: <<>>, do: <<idx::little-signed-32>>
+
+        # Compute scores ONLY for candidate indices
+        scores_bin = ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
+
+        # Parse scores and pair with original indices
+        scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
+
+        Enum.zip(valid_indices, scores_list)
+        |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+        |> Enum.sort_by(fn {_idx, score} -> score end, :desc)
+        |> Enum.take(k)
+        |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+      end
+    else
+      # Flat path: compute all scores, then native top-k selection
+      # If we have a filter, we might need to look at more than just top-K
+      # If NO filter, we use top-K optimization
+      if where_filter == nil and false do # DISABLE ASM FOR NOW
+        search_k = trunc(k * 1.5) + 1
+        scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+        {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(scores_bin, count, search_k, threshold)
+
+        if result_count == 0 do
+          []
+        else
+          indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+          scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
+
+          Enum.zip(indices, scores)
+          |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+          |> Enum.take(k)
+          |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+        end
+      else
+        # With metadata filter, we scan all scores
+        # We use a row-major fallback for filtered queries
+        # because the columnar GEMV NIF is currently unstable.
+        
+        # 1. Flatten tree to row-major for efficient per-vector dot product
+        flat_data = Tree.flatten(tree)
+        
+        # 2. Compute scores for each row
+        scores_list = 
+          for idx <- 0..(count - 1) do
+            vec_bin = binary_part(flat_data, idx * dim * 8, dim * 8)
+            ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
+          end
+        
+        scores_list
+        |> Enum.with_index()
+        |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn {score, idx} -> score >= threshold and matches_where?(tree, idx, where_filter) end)
+        |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
+        |> Enum.take(k)
+        |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+      end
+    end
+  end
+
+  # ==================== Range Query Implementation ====================
+
+  defp execute_range(tree, query_vec, min_sim, max_sim, limit, where_filter) do
+    if tree.count == 0, do: []
+
+    count = tree.count
+    dim = tree.dim
+    tombstones = tree.tombstones || MapSet.new()
+
+    # Normalize query vector
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+    q_norm_bin = for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(64)>>
+
+    # Compute all scores
+    scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+    scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
+
+    # Filter by range [min_sim, max_sim] AND check tombstones AND metadata
+    results =
+      scores_list
       |> Enum.with_index()
-      |> Enum.reduce(accumulator, fn {q_val, dim_idx}, acc_bin ->
-        column_bin = elem(tree.columns, dim_idx)
-        ASM.fp_map_axpy_f64(column_bin, acc_bin, output_size, count, q_val)
+      |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn {score, idx} -> 
+           score >= min_sim and score <= max_sim and matches_where?(tree, idx, where_filter)
+         end)
+      |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
+      |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+
+    # Apply limit if specified
+    if limit, do: Enum.take(results, limit), else: results
+  end
+
+  # Parallel range query using IVF - searches all clusters in parallel
+  defp execute_range_parallel(tree, query_vec, min_sim, max_sim, limit, n_clusters, where_filter) do
+    num_clusters = map_size(tree.clusters)
+
+    # Normalize query
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+    q_norm_bin = for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(64)>>
+
+    # Find top N clusters that might contain matches
+    top_clusters = find_top_n_clusters(tree.centroids, num_clusters, tree.dim, q_norm_bin, min(n_clusters, num_clusters))
+
+    # Search each cluster in parallel
+    results =
+      top_clusters
+      |> Task.async_stream(
+        fn cluster_id ->
+          indices = Map.get(tree.clusters, cluster_id, [])
+          execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, indices, where_filter)
+        end,
+        max_concurrency: System.schedulers_online(),
+        timeout: 10_000
+      )
+      |> Enum.flat_map(fn
+        {:ok, res} -> res
+        {:exit, _reason} -> []
       end)
 
-    scores_list = for <<s::little-float-size(64) <- final_scores_bin>>, do: s
-
-    # Negative threshold = "k-only" mode (return k results without filtering)
-    k_only_mode = threshold < 0
-
-    scores_list
-    |> Stream.with_index()
-    |> Stream.filter(fn {_score, idx} ->
-      if row_indices, do: idx in row_indices, else: true
-    end)
-    |> Stream.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
-    |> Stream.filter(fn {_, score} ->
-      # Skip threshold filter in k-only mode
-      k_only_mode or score >= threshold
-    end)
-    |> Enum.sort_by(fn {_, score} -> score end, :desc)
-    |> Enum.take(k)
+    # Merge, sort, and apply limit
+    sorted = Enum.sort_by(results, fn {_key, score} -> score end, :desc)
+    if limit, do: Enum.take(sorted, limit), else: sorted
   end
 
-  # ==================== Filtered Search ====================
+  # Range search on specific indices (for IVF)
+  defp execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, row_indices, where_filter) do
+    tombstones = tree.tombstones || MapSet.new()
+    
+    valid_indices = 
+      row_indices 
+      |> Enum.reject(fn idx -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn idx -> matches_where?(tree, idx, where_filter) end)
+    
+    if valid_indices == [] do
+      []
+    else
+      count = tree.count
+      dim = tree.dim
 
-  defp execute_knn_filtered(tree, query_vec, k, threshold, filter) do
-    if tree.count == 0, do: []
+      # Convert indices to int32 binary
+      indices_bin = for idx <- valid_indices, into: <<>>, do: <<idx::little-signed-32>>
 
-    # First, get more candidates (we'll filter some out)
-    # Request k * 3 to account for filtering
-    candidate_k = min(k * 3, tree.count)
+      # Compute scores for candidates
+      scores_bin = ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
+      scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
 
-    candidates =
-      if tree.centroids do
-        execute_ivf(tree, query_vec, candidate_k, threshold)
-      else
-        execute_flat(tree, query_vec, candidate_k, threshold)
-      end
-
-    # Apply payload filter to candidates
-    apply_payload_filter(candidates, filter, k)
+      # Filter by range
+      Enum.zip(valid_indices, scores_list)
+      |> Enum.filter(fn {_idx, score} -> score >= min_sim and score <= max_sim end)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+    end
   end
 
-  defp execute_knn_parallel_filtered(tree, query_vec, k, threshold, filter) do
-    if tree.count == 0, do: []
+  # ==================== Metadata Filter Engine ====================
 
-    # Get more candidates to account for filtering
-    candidate_k = min(k * 3, tree.count)
-
-    candidates =
-      if tree.centroids do
-        execute_ivf_parallel(tree, query_vec, candidate_k, threshold)
-      else
-        execute_flat(tree, query_vec, candidate_k, threshold)
-      end
-
-    # Apply payload filter to candidates
-    apply_payload_filter(candidates, filter, k)
+  defp matches_where?(_tree, _idx, nil), do: true
+  defp matches_where?(tree, idx, filters) when is_list(filters) do
+    meta = Map.get(tree.metadata, idx, %{})
+    Enum.all?(filters, fn filter -> match_filter?(meta, filter) end)
   end
 
-  defp apply_payload_filter(candidates, [], k) do
-    # No filter, just take k results
-    Enum.take(candidates, k)
-  end
-
-  defp apply_payload_filter(candidates, filter, k) do
-    # Get keys from candidates
-    keys = Enum.map(candidates, fn {key, _score} -> key end)
-
-    # Fetch payloads from PayloadStore
-    payloads = PayloadStore.get_many(keys)
-
-    # Filter candidates by payload match
-    candidates
-    |> Enum.filter(fn {key, _score} ->
-      case Map.get(payloads, key) do
-        nil -> false  # No payload = doesn't match
-        payload -> Filter.matches?(payload, filter)
-      end
-    end)
-    |> Enum.take(k)
-  end
+  defp match_filter?(meta, {field, :eq, value}), do: Map.get(meta, field) == value
+  defp match_filter?(meta, {field, :neq, value}), do: Map.get(meta, field) != value
+  defp match_filter?(meta, {field, :gt, value}), do: Map.get(meta, field) > value
+  defp match_filter?(meta, {field, :lt, value}), do: Map.get(meta, field) < value
+  defp match_filter?(meta, {field, :gte, value}), do: Map.get(meta, field) >= value
+  defp match_filter?(meta, {field, :lte, value}), do: Map.get(meta, field) <= value
+  defp match_filter?(meta, {field, :in, values}) when is_list(values), do: Map.get(meta, field) in values
+  defp match_filter?(_meta, _), do: false
 
   # ==================== Cluster Finding Helpers ====================
 
@@ -269,6 +543,14 @@ defmodule MerkleDb.Query do
     end
   end
 
+  def validate_query(%Tree{} = tree, [:range, query_vec, min_sim, max_sim | _opts]) do
+    with :ok <- validate_tree(tree),
+         :ok <- validate_query_vector(query_vec, tree.dim),
+         :ok <- validate_range(min_sim, max_sim) do
+      :ok
+    end
+  end
+
   defp validate_tree(%Tree{count: 0}), do: {:error, :empty_tree}
   defp validate_tree(%Tree{dim: 0}), do: {:error, :uninitialized_tree}
   defp validate_tree(_tree), do: :ok
@@ -292,10 +574,14 @@ defmodule MerkleDb.Query do
   defp validate_threshold(t) when is_float(t) or is_integer(t), do: :ok
   defp validate_threshold(_t), do: {:error, "threshold must be a number"}
 
-  defp execute_with_telemetry(_tree, _query_vec, k, threshold, mode, fun) do
-    Telemetry.span([:merkle_db, :query, :execute], %{k: k, threshold: threshold, mode: mode}, fn ->
-      result = fun.()
-      {result, %{result_count: length(result)}}
-    end)
+  defp validate_range(min_sim, max_sim) when is_number(min_sim) and is_number(max_sim) do
+    cond do
+      min_sim > max_sim -> {:error, "min_sim must be <= max_sim"}
+      min_sim < -1.0 or min_sim > 1.0 -> {:error, "min_sim must be in [-1, 1] for cosine similarity"}
+      max_sim < -1.0 or max_sim > 1.0 -> {:error, "max_sim must be in [-1, 1] for cosine similarity"}
+      true -> :ok
+    end
   end
+
+  defp validate_range(_min, _max), do: {:error, "min_sim and max_sim must be numbers"}
 end

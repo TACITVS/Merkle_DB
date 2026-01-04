@@ -23,6 +23,12 @@ defmodule MerkleDb.Progress do
     GenServer.cast(__MODULE__, {:report, update})
   end
 
+  # Called when job finishes
+  def complete(result_json) do
+    GenServer.cast(__MODULE__, {:complete, result_json})
+  end
+
+  # Called by the Web Router to send JSON to frontend
   def get_status do
     GenServer.call(__MODULE__, :get_status)
   end
@@ -40,6 +46,13 @@ defmodule MerkleDb.Progress do
       |> normalize()
 
     {:noreply, merged}
+  end
+
+  @impl true
+  def handle_cast({:complete, json}, state) do
+    # Keep the final stats but mark as done
+    new_state = Map.put(state, :status, :done) |> Map.put(:result, json)
+    {:noreply, new_state}
   end
 
   @impl true
