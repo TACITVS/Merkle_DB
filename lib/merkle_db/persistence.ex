@@ -1,7 +1,10 @@
 defmodule MerkleDb.Persistence do
   @moduledoc """
   Snapshot persistence for MerkleDb.Tree with integrity checks and atomic writes.
+  Uses BLAKE3 for checksums (3-5x faster than SHA-256).
   """
+
+  alias MerkleDb.ASM
 
   @magic <<77, 68, 66, 83>>
   @version 1
@@ -41,7 +44,7 @@ defmodule MerkleDb.Persistence do
     label = Keyword.get(opts, :label, "snapshot")
     meta = build_meta(tree, label)
     payload = encode_payload(meta, tree, compress)
-    checksum = :crypto.hash(:sha256, payload)
+    checksum = ASM.fp_blake3_hash(payload)
     data = <<@magic::binary, @version::unsigned-32, checksum::binary-32, payload::binary>>
 
     case :global.trans({__MODULE__, :snapshot}, fn -> write_atomic(data) end) do
@@ -61,9 +64,14 @@ defmodule MerkleDb.Persistence do
     path = Keyword.get(opts, :path, snapshot_path())
 
     with {:ok, data} <- File.read(path),
-         {:ok, {version, meta, tree}} <- decode_snapshot(data),
-         :ok <- validate_tree(tree) do
-      {:ok, %{tree: tree, meta: meta, version: version, path: path}}
+         {:ok, {version, meta, tree}} <- decode_snapshot(data) do
+      
+      # Upgrade tree structure if needed
+      tree = MerkleDb.Tree.rebuild_aux_data(tree)
+      
+      with :ok <- validate_tree(tree) do
+        {:ok, %{tree: tree, meta: meta, version: version, path: path}}
+      end
     else
       {:error, reason} -> {:error, reason}
     end
@@ -83,7 +91,7 @@ defmodule MerkleDb.Persistence do
   defp decode_snapshot(<<magic::binary-4, version::unsigned-32, checksum::binary-32, payload::binary>>) do
     with true <- magic == @magic || {:error, :invalid_snapshot},
          true <- version == @version || {:error, :version_mismatch},
-         true <- :crypto.hash(:sha256, payload) == checksum || {:error, :checksum_mismatch},
+         true <- ASM.fp_blake3_hash(payload) == checksum || {:error, :checksum_mismatch},
          {@version, meta, tree} <- :erlang.binary_to_term(payload, [:safe]) do
       {:ok, {version, meta, tree}}
     else
@@ -96,6 +104,7 @@ defmodule MerkleDb.Persistence do
 
   defp build_meta(tree, label) do
     clusters = if is_map(tree.clusters), do: map_size(tree.clusters), else: 0
+    tombstones = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
 
     %{
       version: @version,
@@ -104,7 +113,8 @@ defmodule MerkleDb.Persistence do
       vectors: tree.count,
       dim: tree.dim,
       indexed: tree.centroids != nil,
-      clusters: clusters
+      clusters: clusters,
+      tombstones: tombstones
     }
   end
 
