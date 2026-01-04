@@ -7,6 +7,7 @@
 
 ## Recent Implementations
 
+- **2026-01-04**: Metadata/Scalar Filtering implemented (`:where` filter with eq, neq, gt, lt, gte, lte, in)
 - **2026-01-04**: Delete/Update Operations implemented (Tombstone-based soft delete, logical updates)
 - **2026-01-04**: Range Queries implemented (`:range` query type with min/max similarity bounds)
 
@@ -68,30 +69,26 @@ MerkleDb.KV.put("key1", new_vector)
 
 ---
 
-### Priority 2: Metadata/Scalar Filtering
+### Priority 2: Metadata/Scalar Filtering - IMPLEMENTED
 
-**Current State:** Only vector similarity search. No filtering by scalar fields (category, timestamp, price, etc.)
+**Status:** FULLY IMPLEMENTED (2026-01-04)
 
-**Impact:**
-- Cannot implement "find similar products under $50"
-- No multi-tenant isolation via tenant_id filter
-- Limited to pure similarity ranking
+**Implementation:**
+- **Storage:** `metadata` map in `Tree` struct mapping `row_index` to attribute maps.
+- **Predicates:** Support for `:eq`, `:neq`, `:gt`, `:lt`, `:gte`, `:lte`, and `:in`.
+- **Integration:** Filters applied during KNN and Range searches.
+- **Batch Support:** Metadata can be provided during batch insertion.
 
-**Recommended Implementation:**
-```
-1. Add metadata schema to Tree struct
-   %Tree{..., metadata: %{field_name => field_type}}
+**Usage:**
+```elixir
+# KNN with filter
+Query.execute(tree, [:knn, query_vec, 10, 0.7, {:where, [{"price", :lt, 50}, {"cat", :eq, "electronics"}]}])
 
-2. Store metadata per vector in separate column
-   metadata_store: %{row_index => %{field => value}}
-
-3. Implement filter predicates
-   [:knn, query_vec, k, threshold, {:where, [{"price", :<, 50}]}]
-
-4. Apply filters during top-K selection or post-query
+# Range query with filter
+Query.execute(tree, [:range, query_vec, 0.8, 1.0, {:where, [{"tenant_id", :eq, 123}]}])
 ```
 
-**Effort:** Medium-High (3-5 days)
+**Effort:** Medium-High (3-5 days) - COMPLETED
 
 ---
 
@@ -286,7 +283,7 @@ KV.insert("products", key, vector)
 
 ### Phase 1: Core Completeness (1-2 weeks)
 1. ~~Delete operations with tombstones~~ - DONE (2026-01-04)
-2. Basic metadata filtering (equality, range)
+2. ~~Basic metadata filtering (equality, range)~~ - DONE (2026-01-04)
 3. ~~Range queries~~ - DONE (2026-01-04)
 
 ### Phase 2: Performance Parity (2-3 weeks)

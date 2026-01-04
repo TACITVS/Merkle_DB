@@ -9,7 +9,7 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -36,6 +36,7 @@ defmodule MerkleDb.Tree do
       keys: %{},
       key_index: %{},
       tombstones: MapSet.new(),
+      metadata: %{},
       count: 0,
       dim: 0,
       centroids: nil,
@@ -52,17 +53,21 @@ defmodule MerkleDb.Tree do
   end
 
   @doc """
-  Ensure auxiliary data structures (key_index, tombstones) are present.
+  Ensure auxiliary data structures (key_index, tombstones, metadata) are present.
   Used when loading snapshots from older versions.
   """
   def rebuild_aux_data(%__MODULE__{} = tree) do
     tree
     |> ensure_tombstones()
     |> ensure_key_index()
+    |> ensure_metadata()
   end
 
   defp ensure_tombstones(%{tombstones: nil} = tree), do: %{tree | tombstones: MapSet.new()}
   defp ensure_tombstones(tree), do: tree
+
+  defp ensure_metadata(%{metadata: nil} = tree), do: %{tree | metadata: %{}}
+  defp ensure_metadata(tree), do: tree
 
   defp ensure_key_index(%{key_index: nil} = tree) do
     # Rebuild key_index from keys map
@@ -81,7 +86,7 @@ defmodule MerkleDb.Tree do
     %{tree | key_index: new_key_index}
   end
   defp ensure_key_index(tree) do
-    if map_size(tree.key_index) == 0 and map_size(tree.keys) > 0 do
+    if Map.get(tree, :key_index) == nil or (map_size(tree.key_index) == 0 and map_size(tree.keys) > 0) do
        # Try to populate if empty but keys exist
        ensure_key_index(%{tree | key_index: nil})
     else
@@ -90,12 +95,12 @@ defmodule MerkleDb.Tree do
   end
 
   @doc """
-  Insert a single vector into the tree.
+  Insert a single vector into the tree with optional metadata.
   Vectors are L2-normalized at insert time for proper cosine similarity.
   If the key already exists, the old index is tombstoned (soft delete) and the new vector is appended.
   Returns updated tree or raises on error.
   """
-  def insert(tree, key, vector_bin) do
+  def insert(tree, key, vector_bin, meta \\ %{}) do
     # Check limits
     if tree.count >= @max_vector_count do
       raise ArgumentError, "Tree size limit reached: #{@max_vector_count} vectors"
@@ -135,14 +140,15 @@ defmodule MerkleDb.Tree do
       end)
       |> List.to_tuple()
 
-    # 5. Update Key Mappings
+    # 5. Update Key Mappings and Metadata
     new_idx = tree.count
     new_keys = Map.put(tree.keys, new_idx, key)
     new_key_index = Map.put(tree.key_index, key, new_idx)
+    new_metadata = if meta == %{}, do: tree.metadata, else: Map.put(tree.metadata, new_idx, meta)
 
     # 6. Check memory usage
     # Note: Pass updated fields for estimation
-    temp_tree = %{tree | count: new_idx + 1, columns: new_cols, keys: new_keys, key_index: new_key_index}
+    temp_tree = %{tree | count: new_idx + 1, columns: new_cols, keys: new_keys, key_index: new_key_index, metadata: new_metadata}
     estimated_mb = estimate_memory_mb(temp_tree)
     if estimated_mb > @max_tree_size_gb * 1024 do
       raise ArgumentError, "Tree memory limit reached: #{estimated_mb}MB > #{@max_tree_size_gb}GB"
@@ -155,12 +161,7 @@ defmodule MerkleDb.Tree do
   Batch insert multiple vectors. ~50x faster than individual inserts.
   Handles updates by tombstoning old indices for existing keys.
 
-  ## Example
-      tree = Tree.insert_batch(tree, [
-        {"key1", vector_bin1},
-        {"key2", vector_bin2},
-        {"key3", vector_bin3}
-      ])
+  key_vector_pairs: list of {key, vector_bin} or {key, vector_bin, metadata}
   """
   def insert_batch(tree, []), do: tree
   def insert_batch(tree, key_vector_pairs) when is_list(key_vector_pairs) do
@@ -172,8 +173,17 @@ defmodule MerkleDb.Tree do
       raise ArgumentError, "Batch would exceed tree size limit: #{new_count} > #{@max_vector_count}"
     end
 
+    # Normalize input format to {key, vec_bin, meta}
+    normalized_input = 
+      for item <- key_vector_pairs do
+        case item do
+          {k, v} -> {k, v, %{}}
+          {k, v, m} -> {k, v, m}
+        end
+      end
+
     # Parse first vector to get/verify dimensions
-    {_first_key, first_vec_bin} = List.first(key_vector_pairs)
+    {_first_key, first_vec_bin, _first_meta} = List.first(normalized_input)
     floats = for <<x::little-float-size(64) <- first_vec_bin>>, do: x
     dim = length(floats)
 
@@ -186,29 +196,16 @@ defmodule MerkleDb.Tree do
     end
 
     # Pre-normalize all vectors for cosine similarity
-    normalized_pairs =
-      for {key, vec_bin} <- key_vector_pairs do
+    normalized_triplets =
+      for {key, vec_bin, meta} <- normalized_input do
         floats = for <<x::little-float-size(64) <- vec_bin>>, do: x
         norm_floats = normalize_vector(floats)
         norm_bin = floats_to_binary(norm_floats)
-        {key, norm_bin}
+        {key, norm_bin, meta}
       end
 
     # Handle Updates: Identify old indices to tombstone
-    # We also need to handle duplicates WITHIN the batch.
-    # The last occurrence in the batch should win.
-    
-    # First, let's process the batch to find unique keys (last wins) 
-    # but we must append ALL vectors to keep alignment with row indices?
-    # Actually, MerkleDB seems to rely on Append-Only Log. 
-    # If we append 3 versions of "key1", the last one is valid.
-    # The previous 2 should be tombstoned.
-    # Existing "key1" in tree should also be tombstoned.
-    
-    # It's simpler to append ALL, and then update key_index and tombstones.
-    
-    # 1. Find existing keys that are being updated
-    batch_keys = Enum.map(key_vector_pairs, fn {k, _} -> k end)
+    batch_keys = Enum.map(normalized_triplets, fn {k, _, _} -> k end)
     
     updated_tombstones = 
       Enum.reduce(batch_keys, tree.tombstones, fn key, acc ->
@@ -218,13 +215,13 @@ defmodule MerkleDb.Tree do
         end
       end)
       
-    # 2. Append all new vectors (same as before)
+    # Append all new vectors
     column_updates =
       for dim_idx <- 0..(tree.dim - 1) do
         col_bin = elem(tree.columns, dim_idx)
 
         # Collect all values for this dimension
-        new_values = for {_key, vec_bin} <- normalized_pairs do
+        new_values = for {_key, vec_bin, _meta} <- normalized_triplets do
           binary_part(vec_bin, dim_idx * 8, 8)
         end
 
@@ -232,26 +229,26 @@ defmodule MerkleDb.Tree do
         IO.iodata_to_binary([col_bin | new_values])
       end
 
-    # 3. Update keys and key_index
-    # We iterate through the batch, assigning new indices starting from tree.count
-    {new_keys, new_key_index, final_tombstones} =
-      normalized_pairs
+    # Update keys, key_index, and metadata
+    {new_keys, new_key_index, final_tombstones, final_metadata} =
+      normalized_triplets
       |> Enum.with_index(tree.count)
-      |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones}, fn {{key, _vec}, idx}, {keys_acc, key_index_acc, tombs_acc} ->
-        # If this key was seen earlier IN THIS BATCH (and thus put into key_index_acc),
-        # we need to tombstone that earlier batch index too.
-        # Check if key is already in key_index_acc AND the index is >= tree.count (meaning it's from this batch)
+      |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones, tree.metadata}, 
+         fn {{key, _vec, meta}, idx}, {keys_acc, key_index_acc, tombs_acc, meta_acc} ->
         
         tombs_acc = 
           case Map.get(key_index_acc, key) do
             nil -> tombs_acc
-            prev_idx -> MapSet.put(tombs_acc, prev_idx) # Tombstone the previous version (whether old or intra-batch)
+            prev_idx -> MapSet.put(tombs_acc, prev_idx)
           end
           
+        meta_acc = if meta == %{}, do: meta_acc, else: Map.put(meta_acc, idx, meta)
+
         {
           Map.put(keys_acc, idx, key),
           Map.put(key_index_acc, key, idx),
-          tombs_acc
+          tombs_acc,
+          meta_acc
         }
       end)
 
@@ -260,6 +257,7 @@ defmodule MerkleDb.Tree do
       keys: new_keys,
       key_index: new_key_index,
       tombstones: final_tombstones,
+      metadata: final_metadata,
       count: new_count,
       generation: tree.generation + 1
     }
@@ -283,11 +281,13 @@ defmodule MerkleDb.Tree do
       idx ->
         new_tombstones = MapSet.put(tree.tombstones, idx)
         new_key_index = Map.delete(tree.key_index, key)
-        # We don't remove from 'keys' or 'columns' to preserve append-only structure/indices
+        # We also remove from metadata to save space (since it's not needed if deleted)
+        new_metadata = Map.delete(tree.metadata, idx)
         
         %{tree | 
           tombstones: new_tombstones, 
           key_index: new_key_index,
+          metadata: new_metadata,
           generation: tree.generation + 1
         }
     end
@@ -300,16 +300,19 @@ defmodule MerkleDb.Tree do
     # columns: count * dim * 8 bytes (f64)
     # keys: count * ~50 bytes (average key size + map overhead)
     # key_index: count * ~50 bytes (inverse of keys)
-    # tombstones: count * 8 bytes (worst case all deleted)
+    # metadata: active_count * ~100 bytes (approx)
     
     columns_mb = (count * dim * 8) / (1024 * 1024)
     keys_mb = (count * 50) / (1024 * 1024)
     key_index_mb = (count * 50) / (1024 * 1024)
     
+    metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
+    metadata_mb = (metadata_count * 100) / (1024 * 1024)
+    
     tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
     tombstones_mb = (tombstones_count * 32) / (1024 * 1024) # Approximate overhead for set
     
-    Float.round(columns_mb + keys_mb + key_index_mb + tombstones_mb, 2)
+    Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb, 2)
   end
 
   @doc """
@@ -323,7 +326,8 @@ defmodule MerkleDb.Tree do
       memory_mb: estimate_memory_mb(tree),
       has_ivf_index: tree.centroids != nil,
       cluster_count: map_size(tree.clusters),
-      tombstones: MapSet.size(tree.tombstones || MapSet.new())
+      tombstones: MapSet.size(tree.tombstones || MapSet.new()),
+      metadata_entries: map_size(tree.metadata || %{})
     }
   end
 

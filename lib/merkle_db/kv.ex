@@ -8,8 +8,11 @@ defmodule MerkleDb.KV do
 
   def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
-  @doc "Insert a single vector"
-  def put(key, vector), do: GenServer.call(__MODULE__, {:put, key, vector})
+  @doc "Insert a single vector with optional metadata"
+  def put(key, vector, metadata \\ %{}), do: GenServer.call(__MODULE__, {:put, key, vector, metadata})
+
+  @doc "Batch insert vectors with optional metadata"
+  def put_batch(key_vector_pairs), do: GenServer.call(__MODULE__, {:put_batch, key_vector_pairs})
 
   @doc "Delete a key (soft delete)"
   def delete(key), do: GenServer.call(__MODULE__, {:delete, key})
@@ -40,8 +43,14 @@ defmodule MerkleDb.KV do
   end
 
   @impl true
-  def handle_call({:put, key, vector}, _from, current_tree) do
-    new_tree = Tree.insert(current_tree, key, vector)
+  def handle_call({:put, key, vector, metadata}, _from, current_tree) do
+    new_tree = Tree.insert(current_tree, key, vector, metadata)
+    {:reply, :ok, new_tree}
+  end
+
+  @impl true
+  def handle_call({:put_batch, pairs}, _from, current_tree) do
+    new_tree = Tree.insert_batch(current_tree, pairs)
     {:reply, :ok, new_tree}
   end
 

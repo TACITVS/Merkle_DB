@@ -14,79 +14,78 @@ defmodule MerkleDb.Query do
   - [:knn, query_vec, k, threshold] - K-nearest neighbors with similarity threshold
   - [:knn, query_vec, k, threshold, :parallel] - Parallel IVF search across top clusters
   - [:knn, query_vec, k, threshold, :cached] - Cache-aware search
+  - [:knn, query_vec, k, threshold, {:where, filters}] - KNN with metadata filtering
 
   ### Range Queries
   - [:range, query_vec, min_sim, max_sim] - All vectors with similarity in [min_sim, max_sim]
   - [:range, query_vec, min_sim, max_sim, :parallel] - Parallel IVF range search
   - [:range, query_vec, min_sim, max_sim, limit] - Range with max results limit
+  - [:range, query_vec, min_sim, max_sim, {:where, filters}] - Range with metadata filtering
+
+  ## Metadata Filtering Syntax
+  Filters is a list of conditions: `[{"field", :eq, value}, {"field", :>, value}, ...]`
+  Supported operators: :eq, :neq, :gt, :lt, :gte, :lte, :in
 
   ## Options
   - parallel: Search top N clusters in parallel (requires IVF index)
   - cached: Use VectorCache for repeated queries
   - limit: Maximum number of results (for range queries)
+  - {:where, filters}: Filter by metadata
   """
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold]) do
-    if tree.count == 0, do: []
+  def execute(%Tree{} = tree, query) do
+    case query do
+      [:knn, query_vec, k, threshold | opts] ->
+        if tree.count == 0, do: [], else: do_knn(tree, query_vec, k, threshold, opts)
 
-    if tree.centroids do
-      execute_ivf(tree, query_vec, k, threshold)
-    else
-      execute_flat(tree, query_vec, k, threshold)
+      [:range, query_vec, min_sim, max_sim | opts] ->
+        if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
+
+      _ ->
+        {:error, :unsupported_query}
     end
   end
 
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, :parallel]) do
-    if tree.count == 0, do: []
+  defp do_knn(tree, query_vec, k, threshold, opts) do
+    where_filter = extract_where(opts)
+    parallel = :parallel in opts
+    cached = :cached in opts
 
-    if tree.centroids do
-      execute_ivf_parallel(tree, query_vec, k, threshold)
+    if cached do
+      cache_key = {:knn, ASM.fp_blake3_hash(query_vec), k, threshold, where_filter}
+      VectorCache.get_or_compute(cache_key, fn ->
+        do_knn(tree, query_vec, k, threshold, List.delete(opts, :cached))
+      end)
     else
-      execute_flat(tree, query_vec, k, threshold)
+      cond do
+        parallel and tree.centroids != nil ->
+          execute_ivf_parallel(tree, query_vec, k, threshold, 5, where_filter)
+
+        tree.centroids != nil and where_filter == nil ->
+          execute_ivf(tree, query_vec, k, threshold)
+
+        true ->
+          execute_flat(tree, query_vec, k, threshold, nil, where_filter)
+      end
     end
   end
 
-  def execute(%Tree{} = tree, [:knn, query_vec, k, threshold, :cached]) do
-    cache_key = {:knn, ASM.fp_blake3_hash(query_vec), k, threshold}
+  defp do_range(tree, query_vec, min_sim, max_sim, opts) do
+    where_filter = extract_where(opts)
+    parallel = :parallel in opts
+    limit = Enum.find(opts, &is_integer/1)
 
-    VectorCache.get_or_compute(cache_key, fn ->
-      execute(tree, [:knn, query_vec, k, threshold])
+    if parallel and tree.centroids != nil do
+      execute_range_parallel(tree, query_vec, min_sim, max_sim, limit, 10, where_filter)
+    else
+      execute_range(tree, query_vec, min_sim, max_sim, limit, where_filter)
+    end
+  end
+
+  defp extract_where(opts) do
+    Enum.find_value(opts, fn
+      {:where, filters} -> filters
+      _ -> nil
     end)
-  end
-
-  # ==================== Range Queries ====================
-
-  # Range query: returns all vectors with similarity score in [min_sim, max_sim].
-  # Unlike KNN which returns top-K, this returns ALL matches in the range.
-  def execute(%Tree{} = tree, [:range, query_vec, min_sim, max_sim]) do
-    execute_range(tree, query_vec, min_sim, max_sim, nil)
-  end
-
-  def execute(%Tree{count: 0}, [:range, _query_vec, _min_sim, _max_sim, :parallel]), do: []
-
-  def execute(%Tree{} = tree, [:range, query_vec, min_sim, max_sim, :parallel]) do
-    if tree.centroids do
-      execute_range_parallel(tree, query_vec, min_sim, max_sim, nil)
-    else
-      execute_range(tree, query_vec, min_sim, max_sim, nil)
-    end
-  end
-
-  def execute(%Tree{} = tree, [:range, query_vec, min_sim, max_sim, limit])
-      when is_integer(limit) and limit > 0 do
-    execute_range(tree, query_vec, min_sim, max_sim, limit)
-  end
-
-  def execute(%Tree{count: 0}, [:range, _query_vec, _min_sim, _max_sim, limit, :parallel])
-      when is_integer(limit) and limit > 0,
-      do: []
-
-  def execute(%Tree{} = tree, [:range, query_vec, min_sim, max_sim, limit, :parallel])
-      when is_integer(limit) and limit > 0 do
-    if tree.centroids do
-      execute_range_parallel(tree, query_vec, min_sim, max_sim, limit)
-    else
-      execute_range(tree, query_vec, min_sim, max_sim, limit)
-    end
   end
 
   # ==================== IVF Search (Single Cluster) ====================
@@ -101,14 +100,14 @@ defmodule MerkleDb.Query do
     indices = Map.get(tree.clusters, cluster_id, [])
 
     # 3. Perform search ONLY on these indices
-    execute_flat(tree, query_vec, k, threshold, indices)
+    execute_flat(tree, query_vec, k, threshold, indices, nil)
   end
 
   # ==================== IVF Parallel Search (Top N Clusters) ====================
 
   # Parallel IVF search across top N candidate clusters.
   # Significantly faster for high-dimensional data with good clustering.
-  defp execute_ivf_parallel(tree, query_vec, k, threshold, n_clusters \\ 5) do
+  defp execute_ivf_parallel(tree, query_vec, k, threshold, n_clusters, where_filter) do
     num_clusters = map_size(tree.clusters)
 
     # 1. Find top N nearest clusters (not just 1)
@@ -120,7 +119,7 @@ defmodule MerkleDb.Query do
       |> Task.async_stream(
         fn cluster_id ->
           indices = Map.get(tree.clusters, cluster_id, [])
-          execute_flat(tree, query_vec, k * 2, threshold, indices)  # Get more results per cluster
+          execute_flat(tree, query_vec, k * 2, threshold, indices, where_filter)  # Get more results per cluster
         end,
         max_concurrency: System.schedulers_online(),
         timeout: 10_000
@@ -138,7 +137,7 @@ defmodule MerkleDb.Query do
 
   # ==================== Flat Search (Brute Force) ====================
 
-  defp execute_flat(tree, query_vec, k, threshold, row_indices \\ nil) do
+  defp execute_flat(tree, query_vec, k, threshold, row_indices, where_filter) do
     count = tree.count
     dim = tree.dim
     tombstones = tree.tombstones || MapSet.new()
@@ -151,8 +150,11 @@ defmodule MerkleDb.Query do
 
     if row_indices do
       # IVF path: use indexed GEMV - O(num_indices * dim) instead of O(count * dim)
-      # First, filter out tombstones from the candidate indices
-      valid_indices = Enum.filter(row_indices, fn idx -> not MapSet.member?(tombstones, idx) end)
+      # First, filter out tombstones AND metadata from the candidate indices
+      valid_indices = 
+        row_indices 
+        |> Enum.reject(fn idx -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn idx -> matches_where?(tree, idx, where_filter) end)
 
       if valid_indices == [] do
         []
@@ -174,32 +176,53 @@ defmodule MerkleDb.Query do
       end
     else
       # Flat path: compute all scores, then native top-k selection
-      # We request K * 1.5 to account for potential deleted items in the top results
-      # This is a heuristic; strictly correct would be to filter inside ASM or fetch more if needed
-      search_k = trunc(k * 1.5) + 1
-      
-      scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+      # If we have a filter, we might need to look at more than just top-K
+      # If NO filter, we use top-K optimization
+      if where_filter == nil do
+        search_k = trunc(k * 1.5) + 1
+        scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+        {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(scores_bin, count, search_k, threshold)
 
-      {result_count, indices_bin, result_scores_bin} =
-        ASM.fp_query_topk(scores_bin, count, search_k, threshold)
+        if result_count == 0 do
+          []
+        else
+          indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+          scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
 
-      if result_count == 0 do
-        []
+          Enum.zip(indices, scores)
+          |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+          |> Enum.take(k)
+          |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+        end
       else
-        indices = for <<i::little-signed-32 <- indices_bin>>, do: i
-        scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
-
-        Enum.zip(indices, scores)
-        |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+        # With metadata filter, we scan all scores
+        # We use a row-major fallback for filtered queries
+        # because the columnar GEMV NIF is currently unstable.
+        
+        # 1. Flatten tree to row-major for efficient per-vector dot product
+        flat_data = Tree.flatten(tree)
+        
+        # 2. Compute scores for each row
+        scores_list = 
+          for idx <- 0..(count - 1) do
+            vec_bin = binary_part(flat_data, idx * dim * 8, dim * 8)
+            ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
+          end
+        
+        scores_list
+        |> Enum.with_index()
+        |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn {score, idx} -> score >= threshold and matches_where?(tree, idx, where_filter) end)
+        |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
         |> Enum.take(k)
-        |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+        |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
       end
     end
   end
 
   # ==================== Range Query Implementation ====================
 
-  defp execute_range(tree, query_vec, min_sim, max_sim, limit) do
+  defp execute_range(tree, query_vec, min_sim, max_sim, limit, where_filter) do
     if tree.count == 0, do: []
 
     count = tree.count
@@ -216,12 +239,14 @@ defmodule MerkleDb.Query do
     scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
     scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
 
-    # Filter by range [min_sim, max_sim] AND check tombstones
+    # Filter by range [min_sim, max_sim] AND check tombstones AND metadata
     results =
       scores_list
       |> Enum.with_index()
       |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
-      |> Enum.filter(fn {score, _idx} -> score >= min_sim and score <= max_sim end)
+      |> Enum.filter(fn {score, idx} -> 
+           score >= min_sim and score <= max_sim and matches_where?(tree, idx, where_filter)
+         end)
       |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
       |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
 
@@ -230,7 +255,7 @@ defmodule MerkleDb.Query do
   end
 
   # Parallel range query using IVF - searches all clusters in parallel
-  defp execute_range_parallel(tree, query_vec, min_sim, max_sim, limit, n_clusters \\ 10) do
+  defp execute_range_parallel(tree, query_vec, min_sim, max_sim, limit, n_clusters, where_filter) do
     num_clusters = map_size(tree.clusters)
 
     # Normalize query
@@ -248,7 +273,7 @@ defmodule MerkleDb.Query do
       |> Task.async_stream(
         fn cluster_id ->
           indices = Map.get(tree.clusters, cluster_id, [])
-          execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, indices)
+          execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, indices, where_filter)
         end,
         max_concurrency: System.schedulers_online(),
         timeout: 10_000
@@ -264,9 +289,13 @@ defmodule MerkleDb.Query do
   end
 
   # Range search on specific indices (for IVF)
-  defp execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, row_indices) do
+  defp execute_range_indexed(tree, q_norm_bin, min_sim, max_sim, row_indices, where_filter) do
     tombstones = tree.tombstones || MapSet.new()
-    valid_indices = Enum.filter(row_indices, fn idx -> not MapSet.member?(tombstones, idx) end)
+    
+    valid_indices = 
+      row_indices 
+      |> Enum.reject(fn idx -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn idx -> matches_where?(tree, idx, where_filter) end)
     
     if valid_indices == [] do
       []
@@ -287,6 +316,23 @@ defmodule MerkleDb.Query do
       |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
     end
   end
+
+  # ==================== Metadata Filter Engine ====================
+
+  defp matches_where?(_tree, _idx, nil), do: true
+  defp matches_where?(tree, idx, filters) when is_list(filters) do
+    meta = Map.get(tree.metadata, idx, %{})
+    Enum.all?(filters, fn filter -> match_filter?(meta, filter) end)
+  end
+
+  defp match_filter?(meta, {field, :eq, value}), do: Map.get(meta, field) == value
+  defp match_filter?(meta, {field, :neq, value}), do: Map.get(meta, field) != value
+  defp match_filter?(meta, {field, :gt, value}), do: Map.get(meta, field) > value
+  defp match_filter?(meta, {field, :lt, value}), do: Map.get(meta, field) < value
+  defp match_filter?(meta, {field, :gte, value}), do: Map.get(meta, field) >= value
+  defp match_filter?(meta, {field, :lte, value}), do: Map.get(meta, field) <= value
+  defp match_filter?(meta, {field, :in, values}) when is_list(values), do: Map.get(meta, field) in values
+  defp match_filter?(_meta, _), do: false
 
   # ==================== Cluster Finding Helpers ====================
 
