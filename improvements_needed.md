@@ -7,6 +7,7 @@
 
 ## Recent Implementations
 
+- **2026-01-04**: HNSW Indexing implemented (Fast approximate nearest neighbor search)
 - **2026-01-04**: Int8 Scalar Quantization implemented (8x memory reduction, AVX2-accelerated)
 - **2026-01-04**: Metadata/Scalar Filtering implemented (`:where` filter with eq, neq, gt, lt, gte, lte, in)
 - **2026-01-04**: Delete/Update Operations implemented (Tombstone-based soft delete, logical updates)
@@ -93,31 +94,26 @@ Query.execute(tree, [:range, query_vec, 0.8, 1.0, {:where, [{"tenant_id", :eq, 1
 
 ---
 
-### Priority 3: HNSW Index
+### Priority 3: HNSW Index - IMPLEMENTED
 
-**Current State:** Only IVF (K-Means) indexing available.
+**Status:** FULLY IMPLEMENTED (2026-01-04)
 
-**Impact:**
-- IVF requires rebuilding centroids when data changes significantly
-- HNSW provides better recall at same latency for many workloads
-- Industry standard (Qdrant, Weaviate, Milvus all use HNSW)
+**Implementation:**
+- **Hierarchical Graph:** Multi-layer navigable small world graph implemented in C.
+- **Native Resource:** Index managed as an Erlang NIF resource for efficiency and safety.
+- **Greedy Search:** Fast layer-by-layer traversal to find approximate nearest neighbors.
+- **Integration:** Automated building via `Tree.build_hnsw/2`. Seamlessly integrated into `Query.execute/2`.
 
-**Recommended Implementation:**
-```
-1. Implement hierarchical graph structure
-   - Multiple layers with decreasing density
-   - Entry point at top layer
+**Usage:**
+```elixir
+# Build HNSW index
+tree = MerkleDb.Tree.build_hnsw(tree, m: 16, ef_construction: 64)
 
-2. Greedy search with backtracking
-   - Start at entry point
-   - Descend layers, searching neighbors
-
-3. Dynamic insertion without full rebuild
-   - Add new node to appropriate layer
-   - Connect to M nearest neighbors
+# Search automatically uses HNSW
+results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 ```
 
-**Effort:** High (1-2 weeks)
+**Effort:** High (1-2 weeks) - COMPLETED
 
 ---
 
@@ -281,7 +277,7 @@ KV.insert("products", key, vector)
 
 ### Phase 2: Performance Parity (2-3 weeks)
 4. ~~Int8 scalar quantization~~ - DONE (2026-01-04)
-5. HNSW index implementation
+5. ~~HNSW index implementation~~ - DONE (2026-01-04)
 6. Namespaces/collections
 
 ### Phase 3: Advanced Features (3-4 weeks)

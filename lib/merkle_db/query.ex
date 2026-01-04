@@ -63,6 +63,10 @@ defmodule MerkleDb.Query do
         tree.centroids != nil and where_filter == nil ->
           execute_ivf(tree, query_vec, k, threshold)
 
+        tree.hnsw != nil and where_filter == nil ->
+          # Use HNSW if available and no filter
+          execute_hnsw(tree, query_vec, k, threshold)
+
         tree.quantized != nil and where_filter == nil ->
           # Use quantized search if available and no filter
           execute_quantized(tree, query_vec, k, threshold)
@@ -70,6 +74,34 @@ defmodule MerkleDb.Query do
         true ->
           execute_flat(tree, query_vec, k, threshold, nil, where_filter)
       end
+    end
+  end
+
+  # ==================== HNSW Search ====================
+
+  defp execute_hnsw(tree, query_vec, k, threshold) do
+    # Normalize query
+    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+    q_norm_bin = if q_mag == 0, do: query_vec, else: (for q <- q_floats, into: <<>>, do: <<q/q_mag::little-float-64>>)
+
+    ef_search = max(k * 2, 32)
+    
+    # 1. Call NIF
+    {result_count, indices_bin, scores_bin} = 
+      ASM.fp_hnsw_search(tree.hnsw, q_norm_bin, k, ef_search, tree.columns, tree.count)
+
+    if result_count == 0 do
+      []
+    else
+      indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+      scores = for <<s::little-float-size(64) <- scores_bin>>, do: s
+      tombstones = tree.tombstones || MapSet.new()
+
+      Enum.zip(indices, scores)
+      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
     end
   end
 

@@ -635,4 +635,15 @@ Returns: scores binary (f64)
 """
 def fp_query_gemv_quantized(_columns, _scaled_query, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 
+# --- HNSW Indexing ---
+
+@doc "Create native HNSW index resource"
+def fp_hnsw_create(_dim, _M, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc "Insert vector into HNSW index"
+def fp_hnsw_insert(_hnsw_res, _vector_idx, _vector_bin, _columns, _count), do: :erlang.nif_error(:nif_not_loaded)
+
+@doc "Search HNSW index"
+def fp_hnsw_search(_hnsw_res, _query_bin, _k, _ef_search, _columns, _count), do: :erlang.nif_error(:nif_not_loaded)
+
 end

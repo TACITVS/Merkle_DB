@@ -85,6 +85,7 @@ C_LIB_OBJS = \
     native/fp_time_series.obj \
     native/fp_vector_ops.obj \
     native/fp_query.obj \
+    native/fp_hnsw.obj \
     native/fp_blake3.obj \
     native/fp_blake3_official.obj \
     native/blake3.obj \

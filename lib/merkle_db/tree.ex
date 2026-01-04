@@ -13,7 +13,7 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -42,6 +42,7 @@ defmodule MerkleDb.Tree do
       tombstones: MapSet.new(),
       metadata: %{},
       quantized: nil,
+      hnsw: nil,
       count: 0,
       dim: 0,
       centroids: nil,
@@ -67,6 +68,7 @@ defmodule MerkleDb.Tree do
     |> ensure_key_index()
     |> ensure_metadata()
     |> ensure_quantized()
+    |> ensure_hnsw()
   end
 
   defp ensure_tombstones(%{tombstones: nil} = tree), do: %{tree | tombstones: MapSet.new()}
@@ -77,6 +79,9 @@ defmodule MerkleDb.Tree do
 
   defp ensure_quantized(%{quantized: nil} = tree), do: %{tree | quantized: nil}
   defp ensure_quantized(tree), do: tree
+
+  defp ensure_hnsw(%{hnsw: nil} = tree), do: %{tree | hnsw: nil}
+  defp ensure_hnsw(tree), do: tree
 
   defp ensure_key_index(%{key_index: nil} = tree) do
     new_key_index = 
@@ -125,6 +130,32 @@ defmodule MerkleDb.Tree do
     }
 
     %{tree | quantized: new_quantized, generation: tree.generation + 1}
+  end
+
+  @doc """
+  Build a Hierarchical Navigable Small World (HNSW) index for the tree.
+  HNSW provides very fast approximate nearest neighbor search without full scans.
+  """
+  def build_hnsw(tree, opts \\ [])
+  def build_hnsw(%__MODULE__{count: 0} = tree, _opts), do: tree
+  def build_hnsw(%__MODULE__{} = tree, opts) do
+    m = Keyword.get(opts, :m, 16)
+    ef_construction = Keyword.get(opts, :ef_construction, 64)
+    
+    # 1. Create native resource
+    hnsw_res = MerkleDb.ASM.fp_hnsw_create(tree.dim, m, ef_construction, tree.count + 1000)
+    
+    # 2. Insert all vectors
+    # We need row-major flattening for efficient insertion
+    # OR we can extract them one by one (slow but simple)
+    flat_data = flatten(tree)
+    
+    Enum.each(0..(tree.count - 1), fn idx ->
+      vec_bin = binary_part(flat_data, idx * tree.dim * 8, tree.dim * 8)
+      MerkleDb.ASM.fp_hnsw_insert(hnsw_res, idx, vec_bin, tree.columns, tree.count)
+    end)
+    
+    %{tree | hnsw: hnsw_res, generation: tree.generation + 1}
   end
 
   @doc """
@@ -297,38 +328,63 @@ defmodule MerkleDb.Tree do
     end
   end
 
-  @doc """
-  Estimate memory usage in MB.
-  """
-  def estimate_memory_mb(%__MODULE__{count: count, dim: dim} = tree) do
-    columns_mb = (count * dim * 8) / (1024 * 1024)
-    keys_mb = (count * 50) / (1024 * 1024)
-    key_index_mb = (count * 50) / (1024 * 1024)
-    metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
-    metadata_mb = (metadata_count * 100) / (1024 * 1024)
-    tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
-    tombstones_mb = (tombstones_count * 32) / (1024 * 1024)
-    quantized_mb = if tree.quantized, do: (count * dim) / (1024 * 1024), else: 0
-    Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb, 2)
-  end
-
-  @doc """
-  Get tree statistics.
-  """
-  def stats(%__MODULE__{} = tree) do
-    %{ 
-      count: tree.count,
-      active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
-      dimensions: tree.dim,
-      memory_mb: estimate_memory_mb(tree),
-      has_ivf_index: tree.centroids != nil,
-      cluster_count: map_size(tree.clusters),
-      tombstones: MapSet.size(tree.tombstones || MapSet.new()),
-      metadata_entries: map_size(tree.metadata || %{}),
-      quantized: tree.quantized != nil
-    }
-  end
-
+    @doc """
+    Estimate memory usage in MB.
+    """
+    def estimate_memory_mb(%__MODULE__{count: count, dim: dim} = tree) do
+      # columns: count * dim * 8 bytes (f64)
+      # keys: count * ~50 bytes (average key size + map overhead)
+      # key_index: count * ~50 bytes (inverse of keys)
+      # metadata: active_count * ~100 bytes (approx)
+      # quantized: count * dim bytes (u8) + overhead
+      # hnsw: approximated as count * M * 4 bytes * layers
+      
+      columns_mb = (count * dim * 8) / (1024 * 1024)
+      keys_mb = (count * 50) / (1024 * 1024)
+      key_index_mb = (count * 50) / (1024 * 1024)
+      
+      metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
+      metadata_mb = (metadata_count * 100) / (1024 * 1024)
+      
+      tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0
+      tombstones_mb = (tombstones_count * 32) / (1024 * 1024)
+      
+      quantized_mb = 
+        if tree.quantized do
+          (count * dim) / (1024 * 1024)
+        else
+          0
+        end
+  
+      hnsw_mb = 
+        if tree.hnsw do
+          # Rough estimate: nodes * avg_edges * 4 bytes + map overhead
+          # Assuming M=16, average neighbors ~16
+          (count * 16 * 8) / (1024 * 1024) 
+        else
+          0
+        end
+      
+      Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb + hnsw_mb, 2)
+    end
+  
+    @doc """
+    Get tree statistics.
+    """
+    def stats(%__MODULE__{} = tree) do
+      %{
+        count: tree.count,
+        active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
+        dimensions: tree.dim,
+        memory_mb: estimate_memory_mb(tree),
+        has_ivf_index: tree.centroids != nil,
+        cluster_count: map_size(tree.clusters),
+        tombstones: MapSet.size(tree.tombstones || MapSet.new()),
+        metadata_entries: map_size(tree.metadata || %{}),
+        quantized: tree.quantized != nil,
+        has_hnsw_index: tree.hnsw != nil
+      }
+    end
   @doc """
   Convert columnar storage to row-major binary format.
   Used by KMeans and PCA which expect row-major data.
