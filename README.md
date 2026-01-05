@@ -41,6 +41,26 @@ Access over **180 specialized functions** for data science directly from Elixir:
 
 ---
 
+## ⚖️ Design Philosophy: Performance vs. Reliability
+
+A common question is: *Why implement a vector database in Elixir instead of pure C or Assembly?*
+
+While a pure C/ASM implementation would undoubtedly be faster for raw mathematical throughput, it lacks the architectural safety nets required for a production-grade database. MerkleDb adopts a **Hybrid Strategy** that provides the best of both worlds:
+
+### The Elixir Control Plane (Reliability & Uptime)
+We leverage Elixir and the BEAM virtual machine for everything that requires **absurdly high reliability and fault tolerance**.
+- **Isolation**: Every operation runs in its own process. If a query crashes, it doesn't take down the database.
+- **Supervision**: The database state is protected by OTP supervision trees, ensuring self-healing and guaranteed uptime.
+- **Distribution**: Built-in support for clustering and transparent replication across nodes.
+- **Concurrency**: The Erlang scheduler handles millions of lightweight processes, allowing MerkleDb to manage thousands of concurrent searches without the thread-safety nightmares of pure C.
+
+### The C/ASM Data Plane (Raw Metal Speed)
+We offload only the "hot" loops—the computationally expensive vector math—to **AVX2-optimized Assembly**. This ensures that the actual search performance is identical to the fastest compiled engines, while the management of that data remains within a safe, functional environment.
+
+By choosing this path, MerkleDb avoids the fragility of pure C databases (buffer overflows, memory leaks, segmentation faults) while maintaining the microsecond-level latency of hardware-accelerated math.
+
+---
+
 ## 🛠️ Architecture
 
 - **Core Storage**: Columnar storage layout optimized for cache-friendly AXPY batch processing.
