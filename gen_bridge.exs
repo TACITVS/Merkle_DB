@@ -451,7 +451,7 @@ Returns: 32-byte hash binary
 def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
 """
 
-    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    priv_dir =\n      case :code.priv_dir(:merkle_db) do\n        {:error, _} ->\n          Path.expand(\"../../priv\", __DIR__)\n        dir ->\n          List.to_string(dir)\n      end\n\n    path = Path.join(priv_dir, \"merkle_nif\") |> String.to_charlist()\n\n    case :erlang.load_nif(path, 0) do\n      :ok -> :ok\n      {:error, {:already_loaded, _}} -> :ok\n      {:error, reason} -> {:error, reason}\n    end\n  end\n#{defs}\n\n#{extra_defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
+    File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    priv_dir =\n      case :code.priv_dir(:merkle_db) do\n        {:error, _} ->\n          Path.expand(\"../../priv\", __DIR__)\n        dir ->\n          List.to_string(dir)\n      end\n\n    base_path = Path.join(priv_dir, \"merkle_nif\")\n    path =\n      if nif_exists?(base_path) do\n        base_path\n      else\n        Path.join(Path.expand(\"../../priv\", __DIR__), \"merkle_nif\")\n      end\n\n    case :erlang.load_nif(String.to_charlist(path), 0) do\n      :ok -> :ok\n      {:error, {:already_loaded, _}} -> :ok\n      {:error, reason} -> {:error, reason}\n    end\n  end\n\n  defp nif_exists?(base_path) do\n    Enum.any?([\".dll\", \".so\", \".dylib\"], fn ext ->\n      File.exists?(base_path <> ext)\n    end)\n  end\n#{defs}\n\n#{extra_defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
   end
 end
 

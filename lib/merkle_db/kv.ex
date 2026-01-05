@@ -218,7 +218,6 @@ defmodule MerkleDb.KV do
       {:reply, {:error, :collection_not_found}, collections}
     end
   end
-  end
 
   defp get_tree(collections, name) do
     case Map.get(collections, name) do

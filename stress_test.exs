@@ -83,7 +83,7 @@ defmodule MerkleDb.StressTest do
     IO.puts "Running 500 Filtered KNN queries..."
     {time_filtered, _} = :timer.tc(fn ->
       Enum.each(1..500, fn _ ->
-        Query.execute(KV.snapshot(@collection), [:knn, query_vec, 10, 0.0, {:where, ["category", :eq, "electronics"] }])
+        Query.execute(KV.snapshot(@collection), [:knn, query_vec, 10, 0.0, {:where, [["category", :eq, "electronics"]] }])
       end)
     end)
     log("- **Scenario**: KNN k=10 + `category == 'electronics'`")
