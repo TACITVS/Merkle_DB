@@ -9,7 +9,7 @@ DLL_OUT = $(PRIV_DIR)/merkle_nif.dll
 BLAKE3_DLL_OUT = $(PRIV_DIR)/blake3_nif.dll
 
 # Compiler Flags
-CFLAGS = -O3 -std=c11 -Wall -mavx2
+CFLAGS = -O3 -std=c11 -Wall -Wno-attributes -mavx2 -mfma -DBLAKE3_NO_AVX512
 LDFLAGS = -shared
 # Includes for Erlang NIF headers and the library headers
 INCLUDES = -I"$(ERL_EI_INCLUDE_DIR)" -Inative -Inative/fp_lib/include
@@ -124,7 +124,7 @@ native/%.obj: native/fp_lib/vendor/%.c
 	gcc $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Link C NIF + ASM Objects + C Lib Objects into DLL
-$(DLL_OUT): $(ASM_OBJS) $(C_LIB_OBJS) $(NIF_SRC)
+$(DLL_OUT): $(ASM_OBJS) $(C_LIB_OBJS) $(NIF_SRC) native/generated_nif.c native/fp_job_nif.c
 	gcc $(CFLAGS) $(LDFLAGS) $(INCLUDES) -o $(DLL_OUT) $(NIF_SRC) $(ASM_OBJS) $(C_LIB_OBJS)
 
 # Compile fp_blake3.c

@@ -157,8 +157,20 @@ defmodule MerkleDb.Web.Router do
       {:ok, conn} ->
         tree = KV.snapshot()
         if tree.count > 50 do
-          _pca_res = MerkleDb.Analytics.reduce_dimensions(tree, 2)
-          send_resp(conn, 200, "{\"status\": \"Ready\", \"total_variance\": 1.0}")
+          pca_res = Analytics.reduce_dimensions(tree, 2)
+          stats = Analytics.pca_stats(pca_res)
+
+          json =
+            %{
+              status: "Ready",
+              total_variance: stats.total_variance,
+              variance_explained: stats.explained_variance
+            }
+            |> Jason.encode!()
+
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(200, json)
         else
           send_resp(conn, 400, "Need more data for PCA")
         end
@@ -190,19 +202,21 @@ defmodule MerkleDb.Web.Router do
             end)
 
             embeddings = Analytics.extract_pca_embeddings(pca_result, tree, components, limit)
+            stats = Analytics.pca_stats(pca_result)
 
-            # TODO: Extract actual variance_explained from PCA result
-            json = %{
-              embeddings: embeddings,
-              variance_explained: List.duplicate(0.33, components),
-              total_variance: 0.95,
-              computation_time_ms: Float.round(time_us / 1000.0, 2),
-              parameters: %{
-                n_components: components,
-                n_vectors: min(tree.count, limit),
-                algorithm: "PCA"
+            json =
+              %{
+                embeddings: embeddings,
+                variance_explained: Enum.take(stats.explained_variance, components),
+                total_variance: stats.total_variance,
+                computation_time_ms: Float.round(time_us / 1000.0, 2),
+                parameters: %{
+                  n_components: components,
+                  n_vectors: min(tree.count, limit),
+                  algorithm: "PCA"
+                }
               }
-            } |> Jason.encode!()
+              |> Jason.encode!()
 
             conn
             |> put_resp_content_type("application/json")
@@ -492,7 +506,7 @@ defmodule MerkleDb.Web.Router do
                 if filter == [] do
                   Query.execute(tree, [:knn, q_vec, limit, threshold])
                 else
-                  Query.execute(tree, [:knn, q_vec, limit, threshold, filter])
+                  Query.execute(tree, [:knn, q_vec, limit, threshold, {:where, filter}])
                 end
               end)
 

@@ -137,7 +137,6 @@ defmodule MerkleDb.SegmentTest do
       records = make_records(10)
       {:ok, _} = Segment.write(path, records)
 
-      results = []
       :ok = Segment.scan(path, fn record ->
         send(self(), {:record, record.id})
       end)

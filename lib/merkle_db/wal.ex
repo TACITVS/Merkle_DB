@@ -324,7 +324,11 @@ defmodule MerkleDb.WAL do
 
       {:error, :corrupted} ->
         # Stop at corruption, return what we have
-        Logger.warning("WAL corruption detected, stopping replay")
+        if Code.ensure_loaded?(Mix) and Mix.env() == :test do
+          Logger.debug("WAL corruption detected, stopping replay")
+        else
+          Logger.warning("WAL corruption detected, stopping replay")
+        end
         {:ok, Enum.reverse(acc)}
 
       {:error, reason} ->

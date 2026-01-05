@@ -62,6 +62,11 @@ defmodule BridgeGeneratorV7 do
     {"fp_hnsw_create", 4, "nif_fp_hnsw_create", 0},
     {"fp_hnsw_insert", 5, "nif_fp_hnsw_insert", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_hnsw_search", 6, "nif_fp_hnsw_search", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_pca_transform_result", 3, "nif_fp_pca_transform_result", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_pca_result_n_components", 1, "nif_fp_pca_result_n_components", 0},
+    {"fp_pca_result_total_variance", 1, "nif_fp_pca_result_total_variance", 0},
+    {"fp_pca_result_explained_variance", 2, "nif_fp_pca_result_explained_variance", 0},
+    {"fp_pca_result_cumulative_variance", 2, "nif_fp_pca_result_cumulative_variance", 0},
     {"fp_blake3_hash", 1, "nif_fp_blake3_hash", 0}
   ]
 
@@ -69,7 +74,18 @@ defmodule BridgeGeneratorV7 do
     {"fp_job_start", ["op", "args", "opts"]},
     {"fp_job_status", ["job"]},
     {"fp_job_result", ["job"]},
-    {"fp_job_cancel", ["job"]}
+    {"fp_job_cancel", ["job"]},
+    {"fp_quantize_f64_to_u8", ["in_bin", "min_val", "inv_scale"]},
+    {"fp_query_gemv_quantized", ["columns_tuple", "query_bin", "bias", "count", "dim"]},
+    {"fp_sparse_dotp", ["indices_a", "values_a", "indices_b", "values_b"]},
+    {"fp_hnsw_create", ["dim", "m", "ef_construction", "capacity"]},
+    {"fp_hnsw_insert", ["hnsw_res", "vector_idx", "vec_bin", "columns_tuple", "count"]},
+    {"fp_hnsw_search", ["hnsw_res", "query_bin", "k", "ef_search", "columns_tuple", "count"]},
+    {"fp_pca_transform_result", ["pca_result", "data_bin", "count"]},
+    {"fp_pca_result_n_components", ["pca_result"]},
+    {"fp_pca_result_total_variance", ["pca_result"]},
+    {"fp_pca_result_explained_variance", ["pca_result", "size"]},
+    {"fp_pca_result_cumulative_variance", ["pca_result", "size"]}
   ]
 
   defp should_use_dirty?(func_name) do
