@@ -213,7 +213,7 @@ defmodule MerkleDb.StorageEngine do
   @impl true
   def handle_call({:upsert, id, vector, payload, version}, _from, state) do
     # Write to WAL first
-    :ok = WAL.append_upsert(state.wal, {id, vector, payload, version})
+    :ok = WAL.append_upsert(state.wal, {"default", id, vector, payload, version})
 
     # Update memtable
     new_memtable = Map.put(state.memtable, id, {vector, payload, version, false})
@@ -228,7 +228,7 @@ defmodule MerkleDb.StorageEngine do
   @impl true
   def handle_call({:delete, id}, _from, state) do
     # Write to WAL
-    :ok = WAL.append_delete(state.wal, id)
+    :ok = WAL.append_delete(state.wal, {"default", id})
 
     # Mark as deleted in memtable (tombstone)
     new_memtable = Map.put(state.memtable, id, {[], %{}, 0, true})
@@ -415,10 +415,10 @@ defmodule MerkleDb.StorageEngine do
   defp replay_to_memtable(entries) do
     Enum.reduce(entries, %{}, fn entry, acc ->
       case entry do
-        {:upsert, {id, vector, payload, version}} ->
+        {:upsert, {_collection, id, vector, payload, version}} ->
           Map.put(acc, id, {vector, payload, version, false})
 
-        {:delete, id} ->
+        {:delete, {_collection, id}} ->
           Map.put(acc, id, {[], %{}, 0, true})
 
         {:commit, _root} ->
@@ -510,7 +510,7 @@ defmodule MerkleDb.StorageEngine do
         :ok = SnapshotStore.save(state.data_dir, snapshot_state)
 
         # Write commit marker to WAL
-        :ok = WAL.append_commit(state.wal, root)
+        :ok = WAL.append_commit(state.wal, {"default", root})
         :ok = WAL.sync(state.wal)
 
         new_state = %{state | last_commit_root: root}
@@ -569,7 +569,7 @@ defmodule MerkleDb.StorageEngine do
           save_manifest(new_state)
 
           # Truncate WAL (we can replay from segments now)
-          # For simplicity, we keep the WAL for now
+          :ok = WAL.reset(state.wal)
 
           Logger.info("Flushed memtable to segment #{state.next_segment_id}: #{info.record_count} records")
 

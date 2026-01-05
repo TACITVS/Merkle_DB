@@ -161,32 +161,52 @@ defmodule MerkleDb.Query do
   end
 
   defp do_hybrid(tree, query_vec, sparse_query, k, threshold, opts) do
-    alpha = Keyword.get(opts, :alpha, 0.5) # Weight for dense score
-    
-    # 1. Get dense results
+    # 1. Get dense and sparse results (oversample for better fusion)
+    # We take k*2 to have enough overlap for RRF
     dense_results = do_knn(tree, query_vec, k * 2, 0.0, opts)
-    
-    # 2. Get sparse results
     sparse_results = do_sparse(tree, sparse_query, k * 2, 0.0)
     
-    # 3. Combine scores (RRF or weighted sum)
-    # We use weighted sum here.
-    dense_map = Map.new(dense_results)
-    sparse_map = Map.new(sparse_results)
+    # 2. Combine results using Reciprocal Rank Fusion (RRF)
+    # score = sum(1 / (k_rrf + rank))
+    rrf_k = Keyword.get(opts, :rrf_k, 60)
     
-    all_keys = MapSet.union(MapSet.new(Map.keys(dense_map)), MapSet.new(Map.keys(sparse_map)))
+    merged_results = rrf_merge(dense_results, sparse_results, rrf_k)
     
-    all_keys
-    |> Enum.map(fn key ->
-      d_score = Map.get(dense_map, key, 0.0)
-      s_score = Map.get(sparse_map, key, 0.0)
-      score = alpha * d_score + (1.0 - alpha) * s_score
-      {key, score}
-    end)
-    |> Enum.filter(fn {_key, score} -> score >= threshold end)
+    # 3. Filter by threshold and take top K
+    # Note: RRF scores are in [0, 1] range, different from cosine similarity.
+    # If a threshold was provided, we might need to normalize or just apply it to raw scores
+    # but usually RRF is treated as a new ranking signal.
+    merged_results
     |> Enum.sort_by(fn {_key, score} -> score end, :desc)
     |> Enum.take(k)
   end
+
+  defp rrf_merge(dense, sparse, k_rrf) do
+    # Create rank maps
+    dense_ranks = 
+      dense 
+      |> Enum.with_index(1) 
+      |> Enum.into(%{}, fn {{key, _score}, rank} -> {key, rank} end)
+
+    sparse_ranks = 
+      sparse 
+      |> Enum.with_index(1) 
+      |> Enum.into(%{}, fn {{key, _score}, rank} -> {key, rank} end)
+
+    all_keys = MapSet.union(MapSet.new(Map.keys(dense_ranks)), MapSet.new(Map.keys(sparse_ranks)))
+
+    all_keys
+    |> Enum.map(fn key ->
+      d_rank = Map.get(dense_ranks, key)
+      s_rank = Map.get(sparse_ranks, key)
+
+      score = rrf_score(d_rank, k_rrf) + rrf_score(s_rank, k_rrf)
+      {key, score}
+    end)
+  end
+
+  defp rrf_score(nil, _k), do: 0.0
+  defp rrf_score(rank, k), do: 1.0 / (k + rank)
 
   defp to_sparse_struct(%MerkleDb.SparseVector{} = sv), do: sv
   defp to_sparse_struct({pairs, dim}) when is_list(pairs) do

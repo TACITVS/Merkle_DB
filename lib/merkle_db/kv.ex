@@ -4,7 +4,9 @@ defmodule MerkleDb.KV do
   """
   use GenServer
 
-  alias MerkleDb.{Tree, Persistence}
+  alias MerkleDb.{Tree, Persistence, WAL}
+
+  require Logger
 
   # State: map of collection_name -> %Tree{}
   def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -79,7 +81,7 @@ defmodule MerkleDb.KV do
   # ==================== Callbacks ====================
   @impl true
   def init(_) do
-    # Load all existing collections from disk
+    # 1. Load all existing collections from disk
     collections = 
       Persistence.list_collections()
       |> Enum.reduce(%{}, fn name, acc ->
@@ -91,8 +93,67 @@ defmodule MerkleDb.KV do
     
     # Ensure "default" exists
     collections = Map.put_new(collections, "default", Tree.new())
+
+    # 2. Replay WAL to recover missing operations
+    wal_path = Application.get_env(:merkle_db, :wal_path, "data/wal.bin")
+    collections = 
+      case WAL.replay(wal_path) do
+        {:ok, entries} ->
+          if length(entries) > 0 do
+            Logger.info("Replaying #{length(entries)} WAL entries...")
+            Enum.reduce(entries, collections, fn entry, acc -> apply_wal_entry(acc, entry) end)
+          else
+            collections
+          end
+        _ -> 
+          collections
+      end
     
     {:ok, collections}
+  end
+
+  defp apply_wal_entry(collections, {:upsert, {collection, key, vector, metadata, version}}) do
+    case get_tree(collections, collection) do
+      {:ok, tree} ->
+        if version > tree.last_wal_version do
+          new_tree = Tree.insert(tree, key, vector, metadata)
+          new_tree = %{new_tree | last_wal_version: version}
+          Map.put(collections, collection, new_tree)
+        else
+          collections
+        end
+      _ ->
+        # Create collection if it was mentioned in WAL but doesn't exist
+        new_tree = Tree.insert(Tree.new(), key, vector, metadata)
+        new_tree = %{new_tree | last_wal_version: version}
+        Map.put(collections, collection, new_tree)
+    end
+  end
+
+  defp apply_wal_entry(collections, {:delete, data}) do
+    {collection, key, version} = case data do
+      {c, k, v} -> {c, k, v}
+      {c, k} -> {c, k, 0}
+    end
+
+    case get_tree(collections, collection) do
+      {:ok, tree} ->
+        if version == 0 or version > tree.last_wal_version do
+          case Tree.delete(tree, key) do
+            {:error, :not_found} -> collections
+            new_tree -> 
+              new_tree = if version > 0, do: %{new_tree | last_wal_version: version}, else: new_tree
+              Map.put(collections, collection, new_tree)
+          end
+        else
+          collections
+        end
+      _ -> collections
+    end
+  end
+
+  defp apply_wal_entry(collections, {:commit, {_collection, _root}}) do
+    collections
   end
 
   # --- Collection Management ---
@@ -131,10 +192,13 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call({:put, collection, key, vector, metadata}, _from, collections) do
+    # 1. Log to WAL first for durability
+    version = System.system_time(:microsecond)
+    :ok = WAL.append_upsert({collection, key, vector, metadata, version})
+
     with {:ok, tree} <- get_tree(collections, collection) do
       new_tree = Tree.insert(tree, key, vector, metadata)
-      # Persist async? For now sync or let caller handle save logic?
-      # Original code didn't persist on put. We assume periodic snapshotting or manual save.
+      new_tree = %{new_tree | last_wal_version: version}
       {:reply, :ok, Map.put(collections, collection, new_tree)}
     else
       err -> {:reply, err, collections}
@@ -143,8 +207,16 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call({:put_batch, collection, pairs}, _from, collections) do
+    # Log each pair to WAL
+    version = System.system_time(:microsecond)
+    Enum.each(pairs, fn
+      {key, vec} -> WAL.append_upsert({collection, key, vec, %{}, version})
+      {key, vec, meta} -> WAL.append_upsert({collection, key, vec, meta, version})
+    end)
+
     with {:ok, tree} <- get_tree(collections, collection) do
       new_tree = Tree.insert_batch(tree, pairs)
+      new_tree = %{new_tree | last_wal_version: version}
       {:reply, :ok, Map.put(collections, collection, new_tree)}
     else
       err -> {:reply, err, collections}
@@ -153,11 +225,16 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call({:delete, collection, key}, _from, collections) do
+    # Log to WAL
+    version = System.system_time(:microsecond)
+    :ok = WAL.append_delete({collection, key, version})
+
     with {:ok, tree} <- get_tree(collections, collection) do
       case Tree.delete(tree, key) do
         {:error, :not_found} ->
           {:reply, {:error, :not_found}, collections}
         new_tree ->
+          new_tree = %{new_tree | last_wal_version: version}
           {:reply, :ok, Map.put(collections, collection, new_tree)}
       end
     else
