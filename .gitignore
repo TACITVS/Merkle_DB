@@ -76,6 +76,11 @@ build_ivf_fix.bat
 # ------------------------------------------------------------------------------
 .idea/
 .vscode/
+.claude/
+.codex/
+.aider/
+.cursor/
+.windsurf/
 *.swp
 *.swo
 *~

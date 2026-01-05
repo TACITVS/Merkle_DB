@@ -10,17 +10,21 @@ defmodule MerkleDb.KV do
   def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @doc "Insert a single vector with optional metadata"
-  def put(collection \\ "default", key, vector, metadata \\ %{}) do
+  def put(key, vector), do: put("default", key, vector, %{})
+  def put(key, vector, metadata), do: put("default", key, vector, metadata)
+  def put(collection, key, vector, metadata) do
     GenServer.call(__MODULE__, {:put, collection, key, vector, metadata})
   end
 
   @doc "Batch insert vectors with optional metadata"
-  def put_batch(collection \\ "default", key_vector_pairs) do
+  def put_batch(key_vector_pairs), do: put_batch("default", key_vector_pairs)
+  def put_batch(collection, key_vector_pairs) do
     GenServer.call(__MODULE__, {:put_batch, collection, key_vector_pairs})
   end
 
   @doc "Delete a key (soft delete)"
-  def delete(collection \\ "default", key) do
+  def delete(key), do: delete("default", key)
+  def delete(collection, key) do
     GenServer.call(__MODULE__, {:delete, collection, key})
   end
 
@@ -40,24 +44,28 @@ defmodule MerkleDb.KV do
   end
 
   @doc "Get tree snapshot for a collection"
-  def snapshot(collection \\ "default") do
+  def snapshot, do: snapshot("default")
+  def snapshot(collection) do
     GenServer.call(__MODULE__, {:snapshot, collection})
   end
 
   @doc "Replace entire tree (used by Bootstrap)"
-  def set_tree(collection \\ "default", %Tree{} = tree) do
+  def set_tree(tree), do: set_tree("default", tree)
+  def set_tree(collection, %Tree{} = tree) do
     GenServer.call(__MODULE__, {:set_tree, collection, tree})
   end
 
   @doc """
   Atomically update tree's IVF index if generation matches (optimistic locking).
   """
-  def update_index(collection \\ "default", %Tree{} = new_tree, expected_generation) do
+  def update_index(tree, expected_generation), do: update_index("default", tree, expected_generation)
+  def update_index(collection, %Tree{} = new_tree, expected_generation) do
     GenServer.call(__MODULE__, {:update_index, collection, new_tree, expected_generation})
   end
 
   @doc "Get current tree generation"
-  def generation(collection \\ "default") do
+  def generation, do: generation("default")
+  def generation(collection) do
     GenServer.call(__MODULE__, {:generation, collection})
   end
 
@@ -65,6 +73,8 @@ defmodule MerkleDb.KV do
   def reset(collection \\ "default") do
     GenServer.call(__MODULE__, {:reset, collection})
   end
+
+  # ==================== Callbacks ====================
 
   # ==================== Callbacks ====================
   @impl true
@@ -200,9 +210,14 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call({:reset, collection}, _from, collections) do
-    # Reset specific collection to empty tree
-    new_tree = MerkleDb.Tree.new()
-    {:reply, :ok, Map.put(collections, collection, new_tree)}
+    if Map.has_key?(collections, collection) do
+      new_collections = Map.put(collections, collection, Tree.new())
+      Persistence.delete(collection)
+      {:reply, :ok, new_collections}
+    else
+      {:reply, {:error, :collection_not_found}, collections}
+    end
+  end
   end
 
   defp get_tree(collections, name) do
