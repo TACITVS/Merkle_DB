@@ -9,13 +9,27 @@ defmodule MerkleDb.ASM do
           List.to_string(dir)
       end
 
-    path = Path.join(priv_dir, "merkle_nif") |> String.to_charlist()
+    base_path = Path.join(priv_dir, "merkle_nif")
+    path =
+      if nif_exists?(base_path) do
+        base_path
+      else
+        Path.join(Path.expand("../../priv", __DIR__), "merkle_nif")
+      end
+
+    path = String.to_charlist(path)
 
     case :erlang.load_nif(path, 0) do
       :ok -> :ok
       {:error, {:already_loaded, _}} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp nif_exists?(base_path) do
+    Enum.any?([".dll", ".so", ".dylib"], fn ext ->
+      File.exists?(base_path <> ext)
+    end)
   end
 @doc "Calls C function: fp_concat_i64"
 def fp_concat_i64(_input_a, _input_b, _size_output, _len_a, _len_b), do: :erlang.nif_error(:nif_not_loaded)

@@ -52,6 +52,7 @@ server.out.log
 # Temporary files
 /tmp/
 *.tmp
+crime_and_punishment.txt
 nul
 
 # Build/compile output logs
@@ -76,6 +77,11 @@ build_ivf_fix.bat
 # ------------------------------------------------------------------------------
 .idea/
 .vscode/
+.claude/
+.codex/
+.aider/
+.cursor/
+.windsurf/
 *.swp
 *.swo
 *~
