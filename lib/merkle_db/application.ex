@@ -27,7 +27,7 @@ defmodule MerkleDb.Application do
       MerkleDb.VectorCache,
 
       # Telemetry: Real-time metrics aggregation
-      MerkleDb.TelemetryAggregator,
+      {MerkleDb.TelemetryAggregator, nil},
 
       # Load Testing: Automated stress testing
       MerkleDb.LoadGenerator,

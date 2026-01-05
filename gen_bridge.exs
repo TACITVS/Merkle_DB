@@ -54,6 +54,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_job_result", 1, "nif_fp_job_result", 0},
     {"fp_job_cancel", 1, "nif_fp_job_cancel", 0},
     {"fp_query_gemv_columnar", 4, "nif_fp_query_gemv_columnar", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_query_gemv_columnar_batch", 5, "manual_nif_fp_query_gemv_columnar_batch", 0},
     {"fp_query_gemv_indexed", 5, "nif_fp_query_gemv_indexed", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_topk", 4, "nif_fp_query_topk", 0},
     {"fp_quantize_f64_to_u8", 3, "nif_fp_quantize_f64_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
@@ -75,6 +76,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_job_status", ["job"]},
     {"fp_job_result", ["job"]},
     {"fp_job_cancel", ["job"]},
+    {"fp_query_gemv_columnar_batch", ["columns_tuple", "queries_bin", "batch_count", "count", "dim"]},
     {"fp_quantize_f64_to_u8", ["in_bin", "min_val", "inv_scale"]},
     {"fp_query_gemv_quantized", ["columns_tuple", "query_bin", "bias", "count", "dim"]},
     {"fp_sparse_dotp", ["indices_a", "values_a", "indices_b", "values_b"]},
@@ -96,8 +98,17 @@ defmodule BridgeGeneratorV7 do
   def run do
     IO.puts "--- 🏗️  BRIDGE GENERATOR V7 (ZERO-COPY / ACCESSORS) 🏗️  ---"
     headers = @allowed_headers |> Enum.map(&Path.join(@include_dir, &1)) |> Enum.filter(&File.exists?/1)
+    IO.inspect(headers, label: "Headers")
     functions = headers |> Enum.flat_map(&parse_header/1) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
-    bridgable_functions = Enum.filter(functions, &supported_signature?/1)
+    
+    # Manual NIFs that should not be auto-generated
+    manual_funcs = ["fp_query_gemv_columnar", "fp_query_gemv_columnar_batch", "fp_query_gemv_indexed", "fp_query_topk", "fp_quantize_f64_to_u8", "fp_query_gemv_quantized", "fp_sparse_dotp", "fp_hnsw_create", "fp_hnsw_insert", "fp_hnsw_search", "fp_pca_transform_result", "fp_pca_result_n_components", "fp_pca_result_total_variance", "fp_pca_result_explained_variance", "fp_pca_result_cumulative_variance", "fp_blake3_hash"]
+    
+    bridgable_functions = 
+      functions 
+      |> Enum.filter(&supported_signature?/1)
+      |> Enum.reject(fn f -> f.name in manual_funcs end)
+
     IO.puts "✅ Found #{length(bridgable_functions)} bridgable functions."
     
     generate_c_nif(bridgable_functions, headers)
