@@ -17,9 +17,7 @@ defmodule MerkleDb.ASM do
         Path.join(Path.expand("../../priv", __DIR__), "merkle_nif")
       end
 
-    path = String.to_charlist(path)
-
-    case :erlang.load_nif(path, 0) do
+    case :erlang.load_nif(String.to_charlist(path), 0) do
       :ok -> :ok
       {:error, {:already_loaded, _}} -> :ok
       {:error, reason} -> {:error, reason}
@@ -579,6 +577,8 @@ def fp_job_status(_job), do: :erlang.nif_error(:nif_not_loaded)
 def fp_job_result(_job), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_job_cancel"
 def fp_job_cancel(_job), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_query_gemv_columnar_batch"
+def fp_query_gemv_columnar_batch(_columns_tuple, _queries_bin, _batch_count, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_quantize_f64_to_u8"
 def fp_quantize_f64_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_quantized"

@@ -34,6 +34,7 @@ static ERL_NIF_TERM nif_fp_job_status(ErlNifEnv* env, int argc, const ERL_NIF_TE
 static ERL_NIF_TERM nif_fp_job_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_job_cancel(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar_batch(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_query_gemv_indexed(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_query_topk(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_quantize_f64_to_u8(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
@@ -2037,6 +2038,7 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"fp_job_result", 1, nif_fp_job_result, 0},
     {"fp_job_cancel", 1, nif_fp_job_cancel, 0},
     {"fp_query_gemv_columnar", 4, nif_fp_query_gemv_columnar, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_query_gemv_columnar_batch", 5, manual_nif_fp_query_gemv_columnar_batch, 0},
     {"fp_query_gemv_indexed", 5, nif_fp_query_gemv_indexed, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_query_topk", 4, nif_fp_query_topk, 0},
     {"fp_quantize_f64_to_u8", 3, nif_fp_quantize_f64_to_u8, ERL_NIF_DIRTY_JOB_CPU_BOUND},

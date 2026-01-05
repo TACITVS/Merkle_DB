@@ -55,6 +55,70 @@ defmodule MerkleDb.Query do
     end)
   end
 
+  @doc """
+  Execute multiple KNN queries in a single batch for high throughput.
+  Amortizes NIF overhead across all queries in the batch.
+
+  ## Parameters
+  - tree: %Tree{}
+  - query_vectors: List of binary query vectors
+  - k: Number of top results per query
+  - threshold: Similarity threshold
+
+  Returns: List of result lists (one per query vector)
+  """
+  def execute_batch(%Tree{count: 0}, _, _, _), do: []
+  def execute_batch(%Tree{} = tree, query_vectors, k, threshold) when is_list(query_vectors) do
+    batch_count = length(query_vectors)
+    dim = tree.dim
+    tombstones = tree.tombstones || MapSet.new()
+
+    # 1. Prepare queries binary
+    # Normalize each query vector
+    norm_queries = 
+      query_vectors
+      |> Enum.map(fn q_vec ->
+        q_floats = for <<x::little-float-size(64) <- q_vec>>, do: x
+        q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
+        if q_mag == 0, do: q_vec, else: (for q <- q_floats, into: <<>>, do: <<q/q_mag::little-float-64>>)
+      end)
+    
+    queries_bin = IO.iodata_to_binary(norm_queries)
+
+    IO.puts "DEBUG: Calling ASM.fp_query_gemv_columnar_batch..."
+    IO.puts "DEBUG: batch_count=#{batch_count}, tree_count=#{tree.count}, dim=#{dim}"
+    IO.puts "DEBUG: queries_bin size=#{byte_size(queries_bin)}"
+    
+    # 2. Call batch NIF
+    scores_bin = ASM.fp_query_gemv_columnar_batch(tree.columns, queries_bin, batch_count, tree.count, dim)
+    
+    IO.puts "DEBUG: scores_bin size=#{byte_size(scores_bin)}"
+
+    # 3. Process results for each query in batch
+    for b <- 0..(batch_count - 1) do
+      # Extract score slice for this query
+      offset = b * tree.count * 8
+      len = tree.count * 8
+      b_scores_bin = binary_part(scores_bin, offset, len)
+
+      # Use top-k selection (same logic as flat search)
+      search_k = trunc(k * 1.5) + 1
+      {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(b_scores_bin, tree.count, search_k, threshold)
+
+      if result_count == 0 do
+        []
+      else
+        indices = for <<i::little-signed-32 <- indices_bin>>, do: i
+        scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
+
+        Enum.zip(indices, scores)
+        |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+        |> Enum.take(k)
+        |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+      end
+    end
+  end
+
   defp execute_with_telemetry(_tree, query, fun) do
     # Extract basic info for telemetry
     {type, k, threshold} =
