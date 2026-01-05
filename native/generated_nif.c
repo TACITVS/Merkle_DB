@@ -42,6 +42,11 @@ static ERL_NIF_TERM nif_fp_sparse_dotp(ErlNifEnv* env, int argc, const ERL_NIF_T
 static ERL_NIF_TERM nif_fp_hnsw_create(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_insert(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_pca_transform_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_pca_result_n_components(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_pca_result_total_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_pca_result_explained_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM nif_fp_pca_result_cumulative_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_blake3_hash(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 
 // Size validation helpers to prevent OOB access
@@ -2040,6 +2045,11 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"fp_hnsw_create", 4, nif_fp_hnsw_create, 0},
     {"fp_hnsw_insert", 5, nif_fp_hnsw_insert, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_hnsw_search", 6, nif_fp_hnsw_search, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_pca_transform_result", 3, nif_fp_pca_transform_result, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_pca_result_n_components", 1, nif_fp_pca_result_n_components, 0},
+    {"fp_pca_result_total_variance", 1, nif_fp_pca_result_total_variance, 0},
+    {"fp_pca_result_explained_variance", 2, nif_fp_pca_result_explained_variance, 0},
+    {"fp_pca_result_cumulative_variance", 2, nif_fp_pca_result_cumulative_variance, 0},
     {"fp_blake3_hash", 1, nif_fp_blake3_hash, 0} 
 }; 
 static int load_resources(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) { RES_TYPE_GaussianNBModel = enif_open_resource_type(env, NULL, "GaussianNBModel", dtor_GaussianNBModel, ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER, NULL);

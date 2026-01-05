@@ -10,16 +10,20 @@
 - **2026-01-04**: Sparse Vector Support implemented (Hybrid dense+sparse search)
 - **2026-01-04**: Namespaces/Collections implemented (Multi-tenant support via `KV` module)
 - **2026-01-04**: HNSW Indexing implemented (Fast approximate nearest neighbor search)
+- **2026-01-04**: HNSW top-k search + ef_search/ef_construction neighbor selection implemented
 - **2026-01-04**: Int8 Scalar Quantization implemented (8x memory reduction, AVX2-accelerated)
 - **2026-01-04**: Metadata/Scalar Filtering implemented (`:where` filter with eq, neq, gt, lt, gte, lte, in)
+- **2026-01-04**: Payload/metadata filter DSL expanded (string ops, nested fields, PayloadStore merge)
 - **2026-01-04**: Delete/Update Operations implemented (Tombstone-based soft delete, logical updates)
 - **2026-01-04**: Range Queries implemented (`:range` query type with min/max similarity bounds)
+- **2026-01-04**: PCA transform + variance metrics implemented
+- **2026-01-04**: Benchmarks use real inserts (no simulation)
 
 ---
 
 ## Executive Summary
 
-MerkleDB is a columnar vector database written in Elixir with 600+ native C/ASM SIMD kernels. It implements IVF (Inverted File) indexing for efficient similarity search. The foundation is solid with exceptional performance characteristics, but significant gaps exist compared to production vector databases like Pinecone, Qdrant, Milvus, and Weaviate.
+MerkleDB is a columnar vector database written in Elixir with 600+ native C/ASM SIMD kernels. It implements IVF indexing plus HNSW, sparse/hybrid search, and Int8 quantization for efficient similarity search. The foundation is solid with strong single-node parity; remaining gaps are product quantization, multi-node distribution/sharding, GPU acceleration, and tree-level incremental backup and embedding extension hooks.
 
 ---
 
@@ -29,26 +33,29 @@ MerkleDB is a columnar vector database written in Elixir with 600+ native C/ASM 
 
 | Category | Features |
 |----------|----------|
-| **Core Operations** | Insert, Batch Insert (50x faster via columnar AXPY), Vector Validation, L2 Normalization |
-| **Search** | KNN with Cosine Similarity, Similarity Threshold Filtering, Cached Queries (BLAKE3 keys) |
-| **Indexing** | IVF (K-Means++), Parallel IVF Search (top-N clusters), Flat/Brute-Force Search, PCA Dimensionality Reduction |
-| **Storage** | BLAKE3-Protected Snapshots, Optional Compression, Atomic Writes with Global Locks, Backup Rotation (current/previous) |
-| **Performance** | AVX2/FMA SIMD Kernels, Columnar Storage Layout, AXPY-Optimized Batch Operations, Indexed GEMV for IVF |
-| **Analytics** | Column Statistics (mean/min/max per dimension), Memory Estimation, Telemetry Integration, Index Statistics |
-| **API** | HTTP REST Endpoints, Batch Operations, Progress Tracking |
-| **Reliability** | Optimistic Locking (generation-based), Single-Node ACID, Crash Recovery via Snapshots |
+| **Core Operations** | Insert, Batch Insert (columnar AXPY), Delete/Update (tombstones), Vector Validation, L2 Normalization |
+| **Search** | KNN, Range, Sparse, Hybrid, Similarity Threshold Filtering, Cached Queries (BLAKE3 keys) |
+| **Filtering** | Metadata/payload filters (atom/string ops: eq/neq/gt/lt/gte/lte/in/not_in/contains/starts_with/exists; nested fields) |
+| **Indexing** | IVF (K-Means++), Parallel IVF Search (top-N clusters), HNSW (top-k, ef_search), Flat/Brute-Force Search, PCA (fit + transform + variance) |
+| **Compression** | Int8 scalar quantization (AVX2 accelerated) |
+| **Storage** | BLAKE3-protected snapshots per collection, optional compression, atomic writes with global locks, backup rotation (current/previous) |
+| **Replication/Sync** | Oplog (ETS/DETS), delta fetch/apply, snapshot export/import |
+| **Performance** | AVX2/FMA SIMD kernels, columnar storage, AXPY batch ops, indexed GEMV for IVF |
+| **Analytics** | Column statistics, memory estimation, telemetry aggregation, index statistics, text analytics |
+| **API** | HTTP REST endpoints, batch operations, progress tracking |
+| **Reliability** | Optimistic locking, crash recovery via snapshots; WAL/segment StorageEngine (experimental) |
 
-### Stubbed (API Exists, Implementation Pending)
+### Remaining Gaps (Not Implemented or Partial)
 
-- `TextAnalytics` module (corpus analysis, word contexts, cluster analysis)
-- `BenchmarkRunner` module (insert/query/IVF benchmarks)
-- Multi-node Clustering (only single-node analysis implemented)
-- Custom Embedding Functions (extensible via FPDispatcher but no examples)
-- Incremental Backup (only full snapshots, no WAL)
+- Product quantization (PQ) for higher compression/recall tradeoffs.
+- Multi-node distribution (consensus/sharding/query routing); replication oplog exists but no cluster orchestration.
+- Tree-level incremental backup/restore (WAL exists for `StorageEngine`, not wired to `Persistence` snapshots).
+- Custom embedding hooks (only `TextEmbedding` built-in today).
+- GPU acceleration (CUDA/ROCm/Metal/Vulkan).
 
 ---
 
-## Critical Gaps
+## Completed Priorities (2026-01-04)
 
 ### Priority 1: Delete/Update Operations - IMPLEMENTED
 
@@ -79,8 +86,8 @@ MerkleDb.KV.put("key1", new_vector)
 
 **Implementation:**
 - **Storage:** `metadata` map in `Tree` struct mapping `row_index` to attribute maps.
-- **Predicates:** Support for `:eq`, `:neq`, `:gt`, `:lt`, `:gte`, `:lte`, and `:in`.
-- **Integration:** Filters applied during KNN and Range searches.
+- **Predicates:** Support for atom/string ops: `eq/neq/gt/lt/gte/lte/in/not_in/contains/starts_with/exists`, plus dot-notation nested fields.
+- **Integration:** Filters applied during KNN and Range searches against merged metadata + payloads (PayloadStore + Tree metadata).
 - **Batch Support:** Metadata can be provided during batch insertion.
 
 **Usage:**
@@ -103,7 +110,8 @@ Query.execute(tree, [:range, query_vec, 0.8, 1.0, {:where, [{"tenant_id", :eq, 1
 **Implementation:**
 - **Hierarchical Graph:** Multi-layer navigable small world graph implemented in C.
 - **Native Resource:** Index managed as an Erlang NIF resource for efficiency and safety.
-- **Greedy Search:** Fast layer-by-layer traversal to find approximate nearest neighbors.
+- **Search:** Greedy top-layer traversal + best-first search at layer 0 with `ef_search` and top-k results.
+- **Build:** `ef_construction` search used during insert to select neighbors per layer.
 - **Integration:** Automated building via `Tree.build_hnsw/2`. Seamlessly integrated into `Query.execute/2`.
 
 **Usage:**
@@ -169,7 +177,7 @@ results = MerkleDb.Query.execute(tree, [:hybrid, dense_vec, sparse_query, 10, 0.
 
 ### Multi-Node Distribution
 
-**Current State:** Single-node only. Cluster module exists but only analyzes local data.
+**Current State:** Single-node only. Replication provides oplog + snapshot/delta sync, but no consensus, sharding, or distributed routing.
 
 **Required for:**
 - Horizontal scaling beyond single machine
@@ -262,12 +270,12 @@ results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 |---------|----------|----------|--------|--------|----------|
 | KNN Search | Yes | Yes | Yes | Yes | Yes |
 | IVF Index | Yes | Yes | No | Yes | No |
-| HNSW Index | **No** | Yes | Yes | Yes | Yes |
-| Delete/Update | **No** | Yes | Yes | Yes | Yes |
-| Metadata Filter | **No** | Yes | Yes | Yes | Yes |
-| Sparse Vectors | **No** | Yes | Yes | Yes | No |
-| Quantization | **No** | Yes | Yes | Yes | Yes |
-| Multi-Node | **No** | Yes | Yes | Yes | Yes |
+| HNSW Index | Yes | Yes | Yes | Yes | Yes |
+| Delete/Update | Yes | Yes | Yes | Yes | Yes |
+| Metadata Filter | Yes | Yes | Yes | Yes | Yes |
+| Sparse Vectors | Yes | Yes | Yes | Yes | No |
+| Quantization | Yes (Int8) | Yes | Yes | Yes | Yes |
+| Multi-Node | **Partial** | Yes | Yes | Yes | Yes |
 | GPU Support | **No** | Yes | Exp | Yes | No |
 | SIMD Optimized | Yes | Yes | Yes | Yes | Yes |
 | Snapshots | Yes | Yes | Yes | Yes | Yes |
@@ -288,13 +296,15 @@ results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 
 ### Phase 3: Advanced Features (3-4 weeks)
 7. ~~Sparse vector support~~ - DONE (2026-01-04)
-8. Product quantization
-9. Hybrid search (dense + sparse) - DONE (2026-01-04)
+8. Product quantization (PQ) for higher compression
+9. Tree-level incremental backups (WAL integration with Persistence snapshots)
+10. Embedding extension hooks + examples (beyond TextEmbedding)
+11. Hybrid search (dense + sparse) - DONE (2026-01-04)
 
 ### Phase 4: Scale (4+ weeks)
-10. Multi-node replication
-11. Sharding strategy
-12. GPU acceleration
+12. Multi-node replication (consensus + membership, build on oplog)
+13. Sharding strategy + distributed query routing
+14. GPU acceleration (CUDA/ROCm/Metal/Vulkan)
 
 ---
 
@@ -314,6 +324,6 @@ results = MerkleDb.Query.execute(tree, [:knn, query_vec, 10, 0.0])
 
 ## Conclusion
 
-MerkleDB has a solid foundation with exceptional SIMD performance and clean architecture. The primary gaps (delete, filtering, HNSW, quantization) are well-understood problems with established solutions. Implementing Priority 1-4 would bring MerkleDB to feature parity with open-source alternatives like Qdrant for single-node deployments.
+MerkleDB has a solid foundation with exceptional SIMD performance and clean architecture. The former critical gaps (delete, filtering, HNSW, quantization) are now implemented, giving strong single-node parity. Remaining work is product quantization, multi-node distribution/sharding, GPU acceleration, and tree-level incremental backup and embedding extensibility.
 
 The columnar storage design and extensive native kernel library are significant differentiators that should be preserved and leveraged as new features are added.

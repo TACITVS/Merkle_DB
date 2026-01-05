@@ -67,6 +67,7 @@ defmodule MerkleDb.KV do
   end
 
   # ==================== Callbacks ====================
+  @impl true
   def init(_) do
     # Load all existing collections from disk
     collections = 
@@ -197,17 +198,17 @@ defmodule MerkleDb.KV do
     end
   end
 
-  defp get_tree(collections, name) do
-    case Map.get(collections, name) do
-      nil -> {:error, :collection_not_found}
-      tree -> {:ok, tree}
-    end
-  end
-
   @impl true
   def handle_call({:reset, collection}, _from, collections) do
     # Reset specific collection to empty tree
     new_tree = MerkleDb.Tree.new()
     {:reply, :ok, Map.put(collections, collection, new_tree)}
+  end
+
+  defp get_tree(collections, name) do
+    case Map.get(collections, name) do
+      nil -> {:error, :collection_not_found}
+      tree -> {:ok, tree}
+    end
   end
 end

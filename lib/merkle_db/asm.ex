@@ -565,6 +565,28 @@ def fp_job_status(_job), do: :erlang.nif_error(:nif_not_loaded)
 def fp_job_result(_job), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_job_cancel"
 def fp_job_cancel(_job), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_quantize_f64_to_u8"
+def fp_quantize_f64_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_query_gemv_quantized"
+def fp_query_gemv_quantized(_columns_tuple, _query_bin, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_sparse_dotp"
+def fp_sparse_dotp(_indices_a, _values_a, _indices_b, _values_b), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_hnsw_create"
+def fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_hnsw_insert"
+def fp_hnsw_insert(_hnsw_res, _vector_idx, _vec_bin, _columns_tuple, _count), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_hnsw_search"
+def fp_hnsw_search(_hnsw_res, _query_bin, _k, _ef_search, _columns_tuple, _count), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_pca_transform_result"
+def fp_pca_transform_result(_pca_result, _data_bin, _count), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_pca_result_n_components"
+def fp_pca_result_n_components(_pca_result), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_pca_result_total_variance"
+def fp_pca_result_total_variance(_pca_result), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_pca_result_explained_variance"
+def fp_pca_result_explained_variance(_pca_result, _size), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_pca_result_cumulative_variance"
+def fp_pca_result_cumulative_variance(_pca_result, _size), do: :erlang.nif_error(:nif_not_loaded)
 
 # --- Struct Accessors ---
 def get_KMeansResult_centroids(_res, _size \\ 0), do: :erlang.nif_error(:nif_not_loaded)

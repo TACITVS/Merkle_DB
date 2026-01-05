@@ -3,7 +3,7 @@ defmodule MerkleDb.Query do
   Vector query execution with IVF indexing, parallel search, and payload filtering.
   """
 
-  alias MerkleDb.{Tree, ASM, Filter, PayloadStore, Telemetry, VectorCache}
+  alias MerkleDb.{Tree, ASM, Telemetry, VectorCache, PayloadStore}
 
   @doc """
   Execute a query against the tree.
@@ -23,8 +23,10 @@ defmodule MerkleDb.Query do
   - [:range, query_vec, min_sim, max_sim, {:where, filters}] - Range with metadata filtering
 
   ## Metadata Filtering Syntax
-  Filters is a list of conditions: `[{"field", :eq, value}, {"field", :>, value}, ...]`
-  Supported operators: :eq, :neq, :gt, :lt, :gte, :lte, :in
+  Filters is a list of conditions: `[{"field", :eq, value}, {"field", "==", value}, ...]`
+  Supported operators: :eq, :neq, :gt, :lt, :gte, :lte, :in, :not_in, :contains,
+  :starts_with, :exists and their string forms ("==", "!=", ">", "<", ">=", "<=",
+  "in", "not_in", "contains", "starts_with", "exists")
 
   ## Options
   - parallel: Search top N clusters in parallel (requires IVF index)
@@ -55,10 +57,14 @@ defmodule MerkleDb.Query do
 
   defp execute_with_telemetry(_tree, query, fun) do
     # Extract basic info for telemetry
-    {type, k, threshold} = case query do
-      [t, _, k, th | _] -> {t, k, th}
-      _ -> {:unknown, 0, 0}
-    end
+    {type, k, threshold} =
+      case query do
+        [:knn, _query_vec, k, th | _] -> {:knn, k, th}
+        [:range, _query_vec, _min_sim, max_sim | _] -> {:range, 0, max_sim}
+        [:sparse, _sparse_query, k, th] -> {:sparse, k, th}
+        [:hybrid, _query_vec, _sparse_query, k, th | _] -> {:hybrid, k, th}
+        _ -> {:unknown, 0, 0}
+      end
 
     Telemetry.span([:merkle_db, :query, :execute], %{type: type, k: k, threshold: threshold}, fn ->
       result = fun.()
@@ -179,10 +185,12 @@ defmodule MerkleDb.Query do
       scores = for <<s::little-float-size(64) <- scores_bin>>, do: s
       tombstones = tree.tombstones || MapSet.new()
 
-      Enum.zip(indices, scores)
-      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
-      |> Enum.filter(fn {_idx, score} -> score >= threshold end)
-      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+      results =
+        Enum.zip(indices, scores)
+        |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn {_idx, score} -> score >= threshold end)
+        |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
+      results
     end
   end
 
@@ -253,8 +261,18 @@ defmodule MerkleDb.Query do
     Enum.find_value(opts, fn
       {:where, filters} -> filters
       _ -> nil
+    end) || if looks_like_filter?(opts), do: opts, else: nil
+  end
+
+  defp looks_like_filter?([]), do: false
+  defp looks_like_filter?(filters) when is_list(filters) do
+    Enum.all?(filters, fn
+      {field, op, _} when (is_binary(field) or is_atom(field)) and (is_binary(op) or is_atom(op)) -> true
+      [field, op, _] when (is_binary(field) or is_atom(field)) and (is_binary(op) or is_atom(op)) -> true
+      _ -> false
     end)
   end
+  defp looks_like_filter?(_), do: false
 
   # ==================== IVF Search (Single Cluster) ====================
 
@@ -346,7 +364,7 @@ defmodule MerkleDb.Query do
       # Flat path: compute all scores, then native top-k selection
       # If we have a filter, we might need to look at more than just top-K
       # If NO filter, we use top-K optimization
-      if where_filter == nil and false do # DISABLE ASM FOR NOW
+      if where_filter == nil do
         search_k = trunc(k * 1.5) + 1
         scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
         {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(scores_bin, count, search_k, threshold)
@@ -363,9 +381,8 @@ defmodule MerkleDb.Query do
           |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
         end
       else
-        # With metadata filter, we scan all scores
-        # We use a row-major fallback for filtered queries
-        # because the columnar GEMV NIF is currently unstable.
+        # With metadata filter, we scan all scores and apply per-row checks.
+        # Use row-major access so we can evaluate filters while scoring.
         
         # 1. Flatten tree to row-major for efficient per-vector dot product
         flat_data = Tree.flatten(tree)
@@ -490,17 +507,101 @@ defmodule MerkleDb.Query do
   defp matches_where?(_tree, _idx, nil), do: true
   defp matches_where?(tree, idx, filters) when is_list(filters) do
     meta = Map.get(tree.metadata, idx, %{})
-    Enum.all?(filters, fn filter -> match_filter?(meta, filter) end)
+    payload =
+      case Map.get(tree.keys, idx) do
+        nil ->
+          %{}
+
+        key ->
+          if :ets.whereis(:payload_store) == :undefined do
+            %{}
+          else
+            case PayloadStore.get(key) do
+              payload when is_map(payload) -> payload
+              _ -> %{}
+            end
+          end
+      end
+
+    data = if payload == %{}, do: meta, else: Map.merge(payload, meta)
+    Enum.all?(filters, fn filter -> match_filter?(data, filter) end)
   end
 
-  defp match_filter?(meta, {field, :eq, value}), do: Map.get(meta, field) == value
-  defp match_filter?(meta, {field, :neq, value}), do: Map.get(meta, field) != value
-  defp match_filter?(meta, {field, :gt, value}), do: Map.get(meta, field) > value
-  defp match_filter?(meta, {field, :lt, value}), do: Map.get(meta, field) < value
-  defp match_filter?(meta, {field, :gte, value}), do: Map.get(meta, field) >= value
-  defp match_filter?(meta, {field, :lte, value}), do: Map.get(meta, field) <= value
-  defp match_filter?(meta, {field, :in, values}) when is_list(values), do: Map.get(meta, field) in values
-  defp match_filter?(_meta, _), do: false
+  defp match_filter?(meta, [field, op, value]), do: match_filter?(meta, {field, op, value})
+
+  defp match_filter?(meta, {field, op, value}) do
+    field_value = get_meta_value(meta, field)
+
+    case op do
+      :exists -> if value == true, do: field_value != nil, else: field_value == nil
+      "exists" -> if value == true, do: field_value != nil, else: field_value == nil
+      _ ->
+        if field_value == nil do
+          false
+        else
+          compare_field(field_value, op, value)
+        end
+    end
+  end
+
+  defp compare_field(field_value, op, value) do
+    case op do
+      :eq -> field_value == value
+      "==" -> field_value == value
+      :neq -> field_value != value
+      "!=" -> field_value != value
+      :gt -> is_number(field_value) and is_number(value) and field_value > value
+      ">" -> is_number(field_value) and is_number(value) and field_value > value
+      :lt -> is_number(field_value) and is_number(value) and field_value < value
+      "<" -> is_number(field_value) and is_number(value) and field_value < value
+      :gte -> is_number(field_value) and is_number(value) and field_value >= value
+      ">=" -> is_number(field_value) and is_number(value) and field_value >= value
+      :lte -> is_number(field_value) and is_number(value) and field_value <= value
+      "<=" -> is_number(field_value) and is_number(value) and field_value <= value
+      :in -> is_list(value) and field_value in value
+      "in" -> is_list(value) and field_value in value
+      :not_in -> is_list(value) and field_value not in value
+      "not_in" -> is_list(value) and field_value not in value
+      :contains -> is_binary(field_value) and is_binary(value) and String.contains?(field_value, value)
+      "contains" -> is_binary(field_value) and is_binary(value) and String.contains?(field_value, value)
+      :starts_with -> is_binary(field_value) and is_binary(value) and String.starts_with?(field_value, value)
+      "starts_with" -> is_binary(field_value) and is_binary(value) and String.starts_with?(field_value, value)
+      _ -> false
+    end
+  end
+
+  defp get_meta_value(meta, field) when is_atom(field) do
+    get_meta_value(meta, Atom.to_string(field))
+  end
+
+  defp get_meta_value(meta, field) when is_binary(field) do
+    parts = String.split(field, ".")
+    get_in_path(meta, parts)
+  end
+
+  defp get_meta_value(_meta, _field), do: nil
+
+  defp get_in_path(value, []), do: value
+  defp get_in_path(nil, _parts), do: nil
+  defp get_in_path(map, [key | rest]) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> get_in_path(value, rest)
+      :error ->
+        case safe_existing_atom(key) do
+          nil -> nil
+          atom_key -> get_in_path(Map.get(map, atom_key), rest)
+        end
+    end
+  end
+  defp get_in_path(_value, _parts), do: nil
+
+  defp safe_existing_atom(value) do
+    try do
+      String.to_existing_atom(value)
+    rescue
+      ArgumentError -> nil
+    end
+  end
 
   # ==================== Cluster Finding Helpers ====================
 

@@ -433,6 +433,75 @@ static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_T
     );
 }
 
+static ERL_NIF_TERM nif_fp_pca_transform_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    PCAResult* res;
+    ErlNifBinary data_bin;
+    int count;
+
+    if (!enif_get_resource(env, argv[0], RES_TYPE_PCAResult, (void**)&res)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &data_bin)) return enif_make_badarg(env);
+    if (!enif_get_int(env, argv[2], &count)) return enif_make_badarg(env);
+    if (count <= 0) return enif_make_badarg(env);
+
+    int d = res->model.n_features;
+    int k = res->model.n_components;
+    size_t expected_in = (size_t)count * (size_t)d * sizeof(double);
+    if (data_bin.size != expected_in) return enif_make_badarg(env);
+
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary((size_t)count * (size_t)k * sizeof(double), &out_bin)) return enif_make_badarg(env);
+
+    fp_pca_transform(&res->model, (const double*)data_bin.data, (double*)out_bin.data, count);
+
+    return enif_make_binary(env, &out_bin);
+}
+
+static ERL_NIF_TERM nif_fp_pca_result_n_components(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    PCAResult* res;
+    if (!enif_get_resource(env, argv[0], RES_TYPE_PCAResult, (void**)&res)) return enif_make_badarg(env);
+    return enif_make_int(env, res->model.n_components);
+}
+
+static ERL_NIF_TERM nif_fp_pca_result_total_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    PCAResult* res;
+    if (!enif_get_resource(env, argv[0], RES_TYPE_PCAResult, (void**)&res)) return enif_make_badarg(env);
+    return enif_make_double(env, res->model.total_variance);
+}
+
+static ERL_NIF_TERM nif_fp_pca_result_explained_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    PCAResult* res;
+    ErlNifUInt64 size;
+
+    if (!enif_get_resource(env, argv[0], RES_TYPE_PCAResult, (void**)&res)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[1], &size)) return enif_make_badarg(env);
+
+    size_t expected = (size_t)res->model.n_components * sizeof(double);
+    if (size > expected || res->model.explained_variance_ratio == NULL) return enif_make_badarg(env);
+
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary((size_t)size, &out_bin)) return enif_make_badarg(env);
+    memcpy(out_bin.data, res->model.explained_variance_ratio, (size_t)size);
+
+    return enif_make_binary(env, &out_bin);
+}
+
+static ERL_NIF_TERM nif_fp_pca_result_cumulative_variance(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    PCAResult* res;
+    ErlNifUInt64 size;
+
+    if (!enif_get_resource(env, argv[0], RES_TYPE_PCAResult, (void**)&res)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[1], &size)) return enif_make_badarg(env);
+
+    size_t expected = (size_t)res->model.n_components * sizeof(double);
+    if (size > expected || res->model.cumulative_variance_ratio == NULL) return enif_make_badarg(env);
+
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary((size_t)size, &out_bin)) return enif_make_badarg(env);
+    memcpy(out_bin.data, res->model.cumulative_variance_ratio, (size_t)size);
+
+    return enif_make_binary(env, &out_bin);
+}
+
 // --- BLAKE3 NIF WRAPPER ---
 
 static ERL_NIF_TERM nif_fp_blake3_hash(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {

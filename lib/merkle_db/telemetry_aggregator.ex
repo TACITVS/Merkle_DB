@@ -244,7 +244,7 @@ defmodule MerkleDb.TelemetryAggregator do
 
   defp safe_kv_snapshot do
     try do
-      GenServer.call(KV, :snapshot, 100)
+      KV.snapshot()
     rescue
       _ -> Tree.new()
     catch

@@ -118,14 +118,10 @@ defmodule MerkleDb.Analytics do
   end
 
   @doc """
-  Extract embeddings for visualization by projecting to first N dimensions.
-
-  NOTE: This is a simplified projection (not true PCA transformation).
-  For now, we project each vector to its first N components for visualization.
-  Future enhancement: Add fp_pca_transform NIF for true PCA projection.
+  Extract embeddings for visualization using the fitted PCA model.
 
   ## Parameters
-  - _pca_result: Binary PCAResult from fp_pca_fit (unused for now)
+  - pca_result: Binary PCAResult from fp_pca_fit
   - tree: The original tree (for data and cluster assignments)
   - n_components: Number of dimensions to project to (2 or 3)
   - limit: Maximum number of embeddings to return (default 500)
@@ -133,39 +129,47 @@ defmodule MerkleDb.Analytics do
   ## Returns
   List of maps: `[%{id: "Chunk 0", coords: [x, y, z], cluster: 0}, ...]`
   """
-  def extract_pca_embeddings(_pca_result, tree, n_components, limit \\ 500) do
-    # Simple projection: Take first n_components dimensions from each vector
-    # This provides approximate visualization (not true PCA, but good enough for demo)
+  def extract_pca_embeddings(pca_result, tree, n_components, limit \\ 500) do
+    sample_count = min(tree.count, limit)
 
-    coords_per_vector = for i <- 0..(min(tree.count, limit) - 1) do
-      # Extract first n_components values from this vector
-      coords = for dim_idx <- 0..(n_components - 1) do
-        if dim_idx < tree.dim do
-          col_bin = elem(tree.columns, dim_idx)
-          <<value::little-float-64>> = binary_part(col_bin, i * 8, 8)
+    if sample_count == 0 do
+      []
+    else
+      model_components = FPDispatcher.call(:fp_pca_result_n_components, [pca_result])
+      components = min(n_components, model_components)
+
+      data_bin = Tree.flatten(tree)
+      sample_bytes = sample_count * tree.dim * 8
+      sample_bin = if byte_size(data_bin) > sample_bytes, do: binary_part(data_bin, 0, sample_bytes), else: data_bin
+
+      transformed =
+        FPDispatcher.call(:fp_pca_transform_result, [
+          pca_result,
+          sample_bin,
+          sample_count
+        ])
+
+      coords_per_vector = for i <- 0..(sample_count - 1) do
+        for comp_idx <- 0..(components - 1) do
+          offset = (i * components + comp_idx) * 8
+          <<value::little-float-64>> = binary_part(transformed, offset, 8)
           Float.round(value, 4)
-        else
-          0.0
         end
       end
 
-      coords
-    end
+      # Get cluster assignments if tree is indexed
+      cluster_assignments = if tree.clusters do
+        # Build reverse map: vec_idx -> cluster_id
+        tree.clusters
+        |> Enum.flat_map(fn {cluster_id, vec_indices} ->
+          Enum.map(vec_indices, fn idx -> {idx, cluster_id} end)
+        end)
+        |> Map.new()
+      else
+        %{}
+      end
 
-    # Get cluster assignments if tree is indexed
-    cluster_assignments = if tree.clusters do
-      # Build reverse map: vec_idx -> cluster_id
-      tree.clusters
-      |> Enum.flat_map(fn {cluster_id, vec_indices} ->
-        Enum.map(vec_indices, fn idx -> {idx, cluster_id} end)
-      end)
-      |> Map.new()
-    else
-      %{}
-    end
-
-    # Combine keys, coordinates, and cluster info
-    embeddings =
+      # Combine keys, coordinates, and cluster info
       coords_per_vector
       |> Enum.with_index()
       |> Enum.map(fn {coords, idx} ->
@@ -178,8 +182,37 @@ defmodule MerkleDb.Analytics do
           cluster: cluster
         }
       end)
+    end
+  end
 
-    embeddings
+  @doc """
+  Extract variance metrics from a PCA result.
+  """
+  def pca_stats(pca_result) do
+    n_components = FPDispatcher.call(:fp_pca_result_n_components, [pca_result])
+    total_variance = FPDispatcher.call(:fp_pca_result_total_variance, [pca_result])
+
+    explained_bin =
+      FPDispatcher.call(:fp_pca_result_explained_variance, [
+        pca_result,
+        n_components * 8
+      ])
+
+    cumulative_bin =
+      FPDispatcher.call(:fp_pca_result_cumulative_variance, [
+        pca_result,
+        n_components * 8
+      ])
+
+    explained = for <<v::little-float-64 <- explained_bin>>, do: v
+    cumulative = for <<v::little-float-64 <- cumulative_bin>>, do: v
+
+    %{
+      n_components: n_components,
+      total_variance: total_variance,
+      explained_variance: explained,
+      cumulative_variance: cumulative
+    }
   end
 
 end

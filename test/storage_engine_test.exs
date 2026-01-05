@@ -2,7 +2,6 @@ defmodule MerkleDb.StorageEngineTest do
   use ExUnit.Case, async: false
 
   alias MerkleDb.StorageEngine
-  alias MerkleDb.Crypto
 
   @test_dir "test/tmp/storage_engine"
 
@@ -193,6 +192,8 @@ defmodule MerkleDb.StorageEngineTest do
       stats2 = StorageEngine.stats(engine2)
 
       # The last_commit includes timestamp, but data structure is same
+      assert byte_size(root1) == 32
+      assert byte_size(root2) == 32
       assert stats1.record_count == stats2.record_count
 
       StorageEngine.close(engine1)

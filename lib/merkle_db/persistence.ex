@@ -39,27 +39,26 @@ defmodule MerkleDb.Persistence do
 
   def list_collections do
     dir = snapshot_dir()
-    files = File.ls!(dir)
-    # IO.puts "DEBUG: Persistence listing files: #{inspect(files)}"
-    
-    files
-    |> Enum.filter(&String.starts_with?(&1, "snapshot-"))
-    |> Enum.filter(&String.ends_with?(&1, "-current.bin"))
-    |> Enum.map(fn filename ->
-      # snapshot-<name>-current.bin
-      len = String.length(filename)
-      if len > 21 do
-        String.slice(filename, 9, len - 21)
-      else
-        nil # Ignore malformed or legacy files like "snapshot-current.bin"
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  rescue
-    e -> 
-      IO.puts "DEBUG: list_collections error: #{inspect(e)}"
-      []
+    case File.ls(dir) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.starts_with?(&1, "snapshot-"))
+        |> Enum.filter(&String.ends_with?(&1, "-current.bin"))
+        |> Enum.map(fn filename ->
+          # snapshot-<name>-current.bin
+          len = String.length(filename)
+          if len > 21 do
+            String.slice(filename, 9, len - 21)
+          else
+            nil # Ignore malformed or legacy files like "snapshot-current.bin"
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      {:error, _reason} ->
+        []
+    end
   end
 
   def save(tree, opts \\ []) do

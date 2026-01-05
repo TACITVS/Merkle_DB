@@ -32,14 +32,15 @@ defmodule MerkleDb.Telemetry do
   """
   def handle_event([:merkle_db, :query, :execute], measurements, metadata, _config) do
     duration_ms = measurements.duration / 1_000_000
+    mode = Map.get(metadata, :type) || Map.get(metadata, :mode)
 
     IO.puts("""
     [MerkleDB Query]
       Duration: #{Float.round(duration_ms, 2)}ms
       Results: #{metadata[:result_count]}
-      Mode: #{metadata[:mode]}
-      K: #{metadata[:k]}
-      Threshold: #{metadata[:threshold]}
+      Mode: #{inspect(mode)}
+      K: #{inspect(metadata[:k])}
+      Threshold: #{inspect(metadata[:threshold])}
     """)
   end
 
