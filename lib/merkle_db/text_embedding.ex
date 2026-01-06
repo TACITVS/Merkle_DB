@@ -30,6 +30,26 @@ defmodule MerkleDb.TextEmbedding do
     end
   end
 
+  @doc "Loads additional vectors from a file into the existing table."
+  def load_vectors(path) do
+    init()
+    if File.exists?(path) do
+      IO.puts "--- Loading Vectors from #{path} into ETS... ---"
+      File.stream!(path)
+      |> Stream.each(fn line ->
+        case String.split(line, " ", trim: true) do
+          [word | values] when length(values) == @dim ->
+            bin = for v <- values, into: <<>>, do: <<String.to_float(v)::float-little-32>>
+            :ets.insert(@table, {word, bin})
+          _ -> :ok
+        end
+      end)
+      |> Stream.run()
+    else
+      {:error, :not_found}
+    end
+  end
+
   @doc "Converts a string of text into a fixed-size embedding vector (f32 binary)."
   def embed(text) when is_binary(text) do
     init()
