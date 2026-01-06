@@ -48,9 +48,16 @@ defmodule MerkleDb.Query do
             []
           else
             # 1. Embed text to f32
-            vec_f32 = TextEmbedding.embed(text)
-            # 2. Convert to f64 for current DB compatibility
-            query_vec = TextEmbedding.to_f64(vec_f32)
+            query_vec = TextEmbedding.embed(text)
+            
+            # 2. Convert to f64 ONLY if tree is f64
+            query_vec = 
+              if tree.precision == :f64 do
+                TextEmbedding.to_f64(query_vec)
+              else
+                query_vec
+              end
+
             # 3. Execute as KNN
             do_knn(tree, query_vec, k, threshold, opts)
           end
@@ -262,9 +269,17 @@ defmodule MerkleDb.Query do
 
   defp execute_hnsw(tree, query_vec, k, threshold) do
     # Normalize query
-    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    q_floats = 
+      case tree.precision do
+        :f32 -> for <<x::little-float-size(32) <- query_vec>>, do: x
+        :f64 -> for <<x::little-float-size(64) <- query_vec>>, do: x
+      end
+
     q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
-    q_norm_bin = if q_mag == 0, do: query_vec, else: (for q <- q_floats, into: <<>>, do: <<q/q_mag::little-float-64>>)
+    q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
+    
+    # HNSW currently only supports f64 search in NIF
+    q_norm_bin = for q <- q_norm_list, into: <<>>, do: <<q::little-float-64>>
 
     ef_search = max(k * 2, 32)
     
@@ -421,16 +436,28 @@ defmodule MerkleDb.Query do
     count = tree.count
     dim = tree.dim
     tombstones = tree.tombstones || MapSet.new()
+    elem_size = if tree.precision == :f32, do: 4, else: 8
 
-    # Normalize query vector
-    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    # Normalize query vector (handles both f32 and f64 input)
+    q_floats = 
+      case tree.precision do
+        :f32 -> for <<x::little-float-size(32) <- query_vec>>, do: x
+        :f64 -> for <<x::little-float-size(64) <- query_vec>>, do: x
+      end
+
     q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
     q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
-    q_norm_bin = for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(64)>>
+    
+    q_norm_bin = 
+      case tree.precision do
+        :f32 -> for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(32)>>
+        :f64 -> for q <- q_norm_list, into: <<>>, do: <<q::little-float-size(64)>>
+      end
 
     if row_indices do
-      # IVF path: use indexed GEMV - O(num_indices * dim) instead of O(count * dim)
-      # First, filter out tombstones AND metadata from the candidate indices
+      # IVF path: use indexed GEMV
+      # (Note: fp_query_gemv_indexed currently only supports f64 in NIF, 
+      # we might need to add f32 version later if using IVF with f32)
       valid_indices = 
         row_indices 
         |> Enum.reject(fn idx -> MapSet.member?(tombstones, idx) end)
@@ -439,13 +466,23 @@ defmodule MerkleDb.Query do
       if valid_indices == [] do
         []
       else
-        # Convert indices to int32 binary
         indices_bin = for idx <- valid_indices, into: <<>>, do: <<idx::little-signed-32>>
 
-        # Compute scores ONLY for candidate indices
-        scores_bin = ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
+        # Fallback to f64 for indexed search if not yet implemented for f32
+        scores_bin = 
+          if tree.precision == :f32 do
+             # For now, let's assume we want to support f32 indexed too.
+             # If NIF is missing, this will fail.
+             # I implemented fp_query_gemv_f32_batch, but not fp_query_gemv_indexed_f32.
+             # Let's keep it simple for now and use the batch kernel if we can.
+             ASM.fp_query_gemv_f32_batch(Tree.flatten(tree), q_norm_bin, count, dim)
+             # Wait, that's brute force. Let's just do manual loop for indexed f32 for now
+             # OR just use f64 for IVF for now.
+             raise "Indexed search not yet implemented for f32"
+          else
+             ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
+          end
 
-        # Parse scores and pair with original indices
         scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
 
         Enum.zip(valid_indices, scores_list)
@@ -455,37 +492,48 @@ defmodule MerkleDb.Query do
         |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
       end
     else
-      # Flat path: compute all scores, then native top-k selection
-      # If we have a filter, we might need to look at more than just top-K
-      # If NO filter, we use top-K optimization
+      # Flat path: compute all scores
       if where_filter == nil do
-        search_k = trunc(k * 1.5) + 1
-        scores_bin = ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
-        {result_count, indices_bin, result_scores_bin} = ASM.fp_query_topk(scores_bin, count, search_k, threshold)
-
-        if result_count == 0 do
-          []
-        else
-          indices = for <<i::little-signed-32 <- indices_bin>>, do: i
-          scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
-
-          Enum.zip(indices, scores)
-          |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
-          |> Enum.take(k)
-          |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
-        end
-      else
-        # With metadata filter, we scan all scores and apply per-row checks.
-        # Use row-major access so we can evaluate filters while scoring.
+        _search_k = trunc(k * 1.5) + 1
         
-        # 1. Flatten tree to row-major for efficient per-vector dot product
+        scores_bin = 
+          if tree.precision == :f32 do
+            # Use our new f32 batch kernel (batch of 1)
+            # Tree.flatten returns f32 if tree is f32
+            ASM.fp_query_gemv_f32_batch(Tree.flatten(tree), q_norm_bin, count, dim)
+          else
+            ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+          end
+
+        # Top-K selection NIF expects f64 or f32? 
+        # fp_query_topk_f64 is what we have.
+        # We need to ensure scores_bin is converted to f64 list if it was f32
+        scores_list = 
+          if tree.precision == :f32 do
+            for <<s::little-float-32 <- scores_bin>>, do: (double = s; double)
+          else
+            for <<s::little-float-64 <- scores_bin>>, do: s
+          end
+        
+        scores_list
+        |> Enum.with_index()
+        |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+        |> Enum.filter(fn {score, _idx} -> score >= threshold end)
+        |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
+        |> Enum.take(k)
+        |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+      else
+        # Metadata filter path
         flat_data = Tree.flatten(tree)
         
-        # 2. Compute scores for each row
         scores_list = 
           for idx <- 0..(count - 1) do
-            vec_bin = binary_part(flat_data, idx * dim * 8, dim * 8)
-            ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
+            vec_bin = binary_part(flat_data, idx * dim * elem_size, dim * elem_size)
+            if tree.precision == :f32 do
+              ASM.fp_fold_dotp_f32(vec_bin, q_norm_bin, dim)
+            else
+              ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
+            end
           end
         
         scores_list
@@ -731,7 +779,7 @@ defmodule MerkleDb.Query do
   """
   def validate_query(%Tree{} = tree, [:knn, query_vec, k, threshold | _opts]) do
     with :ok <- validate_tree(tree),
-         :ok <- validate_query_vector(query_vec, tree.dim),
+         :ok <- validate_query_vector(query_vec, tree.dim, tree.precision),
          :ok <- validate_k(k),
          :ok <- validate_threshold(threshold) do
       :ok
@@ -740,7 +788,7 @@ defmodule MerkleDb.Query do
 
   def validate_query(%Tree{} = tree, [:range, query_vec, min_sim, max_sim | _opts]) do
     with :ok <- validate_tree(tree),
-         :ok <- validate_query_vector(query_vec, tree.dim),
+         :ok <- validate_query_vector(query_vec, tree.dim, tree.precision),
          :ok <- validate_range(min_sim, max_sim) do
       :ok
     end
@@ -750,9 +798,10 @@ defmodule MerkleDb.Query do
   defp validate_tree(%Tree{dim: 0}), do: {:error, :uninitialized_tree}
   defp validate_tree(_tree), do: :ok
 
-  defp validate_query_vector(vec_bin, expected_dim) do
+  defp validate_query_vector(vec_bin, expected_dim, precision \\ :f64) do
     if is_binary(vec_bin) do
-      actual_dim = div(byte_size(vec_bin), 8)
+      elem_size = if precision == :f32, do: 4, else: 8
+      actual_dim = div(byte_size(vec_bin), elem_size)
       if actual_dim == expected_dim do
         :ok
       else

@@ -29,6 +29,10 @@ defmodule MerkleDb.SemanticDemo do
     KV.set_tree(@collection, updated_tree)
     IO.puts "Index built."
     
+    # ROI Rank 2: Check memory usage
+    stats = Tree.stats(KV.snapshot(@collection))
+    IO.puts "Memory Usage: #{stats.memory_mb} MB (Precision: #{stats.precision})"
+    
     # 4. Search Demo using the new :semantic query type
     IO.puts "\n=== Semantic Search Results (AVX2 Accelerated) ==="
     
@@ -44,12 +48,12 @@ defmodule MerkleDb.SemanticDemo do
   end
 
   defp setup_collection do
-    # Create with 300 dims
-    case KV.create_collection(@collection, dim: 300) do
+    # Create with 300 dims and f32 precision (ROI Rank 2)
+    case KV.create_collection(@collection, dim: 300, precision: :f32) do
       :ok -> :ok
       {:error, :already_exists} -> 
         KV.drop_collection(@collection)
-        KV.create_collection(@collection, dim: 300)
+        KV.create_collection(@collection, dim: 300, precision: :f32)
     end
   end
 
