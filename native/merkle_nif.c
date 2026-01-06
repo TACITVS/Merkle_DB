@@ -47,7 +47,8 @@ static void hnsw_res_destructor(ErlNifEnv* env, void* obj) {
 
 // --- QUERY NIF WRAPPERS ---
 
-static ERL_NIF_TERM nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    fprintf(stderr, "NIF ENTRY: fp_query_gemv_columnar\n");
     int dim_int;
     ErlNifUInt64 count, dim;
 
@@ -90,6 +91,8 @@ static ERL_NIF_TERM nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const E
         columns[d] = (const double*)col_bins[d].data;
     }
 
+    fprintf(stderr, "DEBUG NIF: count=%llu, dim=%llu\\n", (unsigned long long)count, (unsigned long long)dim);
+
     ErlNifBinary scores_bin;
     if (!enif_alloc_binary(count * 8, &scores_bin)) {
         free(columns);
@@ -101,8 +104,8 @@ static ERL_NIF_TERM nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, const E
         columns,
         (const double*)query_bin.data,
         (double*)scores_bin.data,
-        count,
-        dim
+        (size_t)count,
+        (size_t)dim
     );
 
     free(columns);
@@ -154,6 +157,32 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar_batch(ErlNifEnv* env, int 
 
     free(columns);
     free(col_bins);
+
+    return enif_make_binary(env, &scores_bin);
+}
+
+static ERL_NIF_TERM manual_nif_fp_query_gemv_f32_batch(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifUInt64 count, dim;
+    ErlNifBinary db_vectors_bin, query_bin;
+
+    if (!enif_inspect_binary(env, argv[0], &db_vectors_bin)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &query_bin)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[2], &count)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[3], &dim)) return enif_make_badarg(env);
+
+    if (query_bin.size != dim * 4) return enif_make_badarg(env);
+    if (db_vectors_bin.size != count * dim * 4) return enif_make_badarg(env);
+
+    ErlNifBinary scores_bin;
+    if (!enif_alloc_binary(count * 4, &scores_bin)) return enif_make_badarg(env);
+
+    fp_query_gemv_f32_batch(
+        (const float*)db_vectors_bin.data,
+        (const float*)query_bin.data,
+        (float*)scores_bin.data,
+        (size_t)count,
+        (size_t)dim
+    );
 
     return enif_make_binary(env, &scores_bin);
 }
@@ -569,6 +598,7 @@ static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info);
 static void unload(ErlNifEnv* env, void* priv_data);
 
 static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) {
+    fprintf(stderr, "NIF LOADING...\n");
     // Initialize HNSW resource type
     HNSW_RES_TYPE = enif_open_resource_type(env, NULL, "hnsw_index", hnsw_res_destructor, ERL_NIF_RT_CREATE, NULL);
     

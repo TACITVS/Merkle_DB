@@ -5,39 +5,39 @@
 - **Dimensions**: 64
 - **Collection**: `stress_test`
 - **Environment**: `win32`
-- **Date**: 2026-01-05 18:32:38.068000Z
+- **Date**: 2026-01-05 20:17:35.359000Z
 
 ## Results
 
 ### 1. Ingestion
-- **Batch Insert**: 1678.23ms
-- **Throughput**: **11917.3 vectors/sec**
+- **Batch Insert**: 1143.91ms
+- **Throughput**: **17483.89 vectors/sec**
 
 ### 2. Indexing (HNSW)
-- **Build Time**: 1340.42ms
+- **Build Time**: 666.21ms
 - **Parameters**: M=16, ef_construction=64
 
 ### 3. Query Latency (Dense)
-- **Total Time**: 9690.52ms (1000 queries)
-- **QPS**: **103.19**
-- **Avg Latency**: 9.691ms
+- **Total Time**: 7063.65ms (1000 queries)
+- **QPS**: **141.57**
+- **Avg Latency**: 7.064ms
 
 ### 4. Metadata Filtering
 - **Scenario**: KNN k=10 + `category == 'electronics'`
-- **Time**: 106059.26ms (500 queries)
+- **Time**: 116111.97ms (500 queries)
 
 ### 5. Concurrency Stress
 - **Workload**: 1000 writes + 1000 reads in parallel
-- **Total Time**: 11856.08ms
+- **Total Time**: 10455.65ms
 - **Stability**: ✅ Passed (No crashes/deadlocks)
 
 ### 6. Int8 Quantization
-- **Quantization Time**: 166.4ms
-- **Quantized QPS**: **89.73**
-- **Speedup**: 0.87x vs Float64
+- **Quantization Time**: 100.97ms
+- **Quantized QPS**: **98.78**
+- **Speedup**: 0.7x vs Float64
 
 ### 7. Hybrid Search (Dense + Sparse)
-- **Time**: 2698.65ms (100 queries)
+- **Time**: 2865.36ms (100 queries)
 - **Status**: ✅ Verified
 
 ## Final Database Statistics

@@ -25,7 +25,7 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0, last_wal_version: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -60,7 +60,8 @@ defmodule MerkleDb.Tree do
       dim: 0,
       centroids: nil,
       clusters: %{},
-      generation: 0
+      generation: 0,
+      last_wal_version: 0
     }
   end
 
@@ -215,11 +216,12 @@ defmodule MerkleDb.Tree do
   If the key already exists, the old index is tombstoned (soft delete) and the new vector is appended.
   Returns updated tree or raises on error.
   """
-  def insert(tree, key, vector_bin, meta \\ %{}) do
+  def insert(tree, key, vector_input, meta \\ %{}) do
     if tree.count >= @max_vector_count do
       raise ArgumentError, "Tree size limit reached: #{@max_vector_count} vectors"
     end
 
+    vector_bin = if is_list(vector_input), do: floats_to_binary(vector_input), else: vector_input
     floats = for <<x::little-float-size(64) <- vector_bin>>, do: x
     dim = length(floats)
     floats = normalize_vector(floats)

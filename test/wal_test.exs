@@ -36,7 +36,7 @@ defmodule MerkleDb.WALTest do
 
       # Create and close
       {:ok, wal1} = WAL.open(path)
-      WAL.append_upsert(wal1, {1, [1.0], %{}, 0})
+      WAL.append_upsert(wal1, {"default", 1, [1.0], %{}, 0})
       WAL.close(wal1)
 
       # Reopen
@@ -52,7 +52,7 @@ defmodule MerkleDb.WALTest do
       path = wal_path("upsert")
       {:ok, wal} = WAL.open(path)
 
-      assert :ok = WAL.append_upsert(wal, {1, [1.0, 2.0, 3.0], %{"key" => "value"}, 0})
+      assert :ok = WAL.append_upsert(wal, {"default", 1, [1.0, 2.0, 3.0], %{"key" => "value"}, 0})
 
       stats = WAL.stats(wal)
       assert stats.entry_count == 1
@@ -64,7 +64,7 @@ defmodule MerkleDb.WALTest do
       {:ok, wal} = WAL.open(path)
 
       for i <- 1..100 do
-        WAL.append_upsert(wal, {i, [i * 1.0], %{}, 0})
+        WAL.append_upsert(wal, {"default", i, [i * 1.0], %{}, 0})
       end
 
       stats = WAL.stats(wal)
@@ -78,7 +78,7 @@ defmodule MerkleDb.WALTest do
       path = wal_path("delete")
       {:ok, wal} = WAL.open(path)
 
-      assert :ok = WAL.append_delete(wal, 42)
+      assert :ok = WAL.append_delete(wal, {"default", 42, 123})
 
       stats = WAL.stats(wal)
       assert stats.entry_count == 1
@@ -113,32 +113,32 @@ defmodule MerkleDb.WALTest do
       path = wal_path("upsert_replay")
       {:ok, wal} = WAL.open(path)
 
-      WAL.append_upsert(wal, {1, [1.0, 2.0], %{"a" => 1}, 100})
-      WAL.append_upsert(wal, {2, [3.0, 4.0], %{"b" => 2}, 200})
+      WAL.append_upsert(wal, {"default", 1, [1.0, 2.0], %{"a" => 1}, 100})
+      WAL.append_upsert(wal, {"default", 2, [3.0, 4.0], %{"b" => 2}, 200})
       WAL.sync(wal)
       WAL.close(wal)
 
       {:ok, entries} = WAL.replay(path)
 
       assert length(entries) == 2
-      assert {:upsert, {1, [1.0, 2.0], %{"a" => 1}, 100}} = hd(entries)
-      assert {:upsert, {2, [3.0, 4.0], %{"b" => 2}, 200}} = Enum.at(entries, 1)
+      assert {:upsert, {"default", 1, [1.0, 2.0], %{"a" => 1}, 100}} = hd(entries)
+      assert {:upsert, {"default", 2, [3.0, 4.0], %{"b" => 2}, 200}} = Enum.at(entries, 1)
     end
 
     test "replays delete entries" do
       path = wal_path("delete_replay")
       {:ok, wal} = WAL.open(path)
 
-      WAL.append_delete(wal, 42)
-      WAL.append_delete(wal, 99)
+      WAL.append_delete(wal, {"default", 42, 100})
+      WAL.append_delete(wal, {"default", 99, 200})
       WAL.sync(wal)
       WAL.close(wal)
 
       {:ok, entries} = WAL.replay(path)
 
       assert length(entries) == 2
-      assert {:delete, 42} = hd(entries)
-      assert {:delete, 99} = Enum.at(entries, 1)
+      assert {:delete, {"default", 42, 100}} = hd(entries)
+      assert {:delete, {"default", 99, 200}} = Enum.at(entries, 1)
     end
 
     test "replays commit entries" do
@@ -160,23 +160,23 @@ defmodule MerkleDb.WALTest do
       path = wal_path("mixed_replay")
       {:ok, wal} = WAL.open(path)
 
-      WAL.append_upsert(wal, {1, [1.0], %{}, 0})
-      WAL.append_upsert(wal, {2, [2.0], %{}, 0})
-      WAL.append_delete(wal, 1)
+      WAL.append_upsert(wal, {"default", 1, [1.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 2, [2.0], %{}, 0})
+      WAL.append_delete(wal, {"default", 1, 0})
       root = Crypto.hash("commit1")
       WAL.append_commit(wal, root)
-      WAL.append_upsert(wal, {3, [3.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 3, [3.0], %{}, 0})
       WAL.sync(wal)
       WAL.close(wal)
 
       {:ok, entries} = WAL.replay(path)
 
       assert length(entries) == 5
-      assert {:upsert, {1, _, _, _}} = Enum.at(entries, 0)
-      assert {:upsert, {2, _, _, _}} = Enum.at(entries, 1)
-      assert {:delete, 1} = Enum.at(entries, 2)
+      assert {:upsert, {"default", 1, _, _, _}} = Enum.at(entries, 0)
+      assert {:upsert, {"default", 2, _, _, _}} = Enum.at(entries, 1)
+      assert {:delete, {"default", 1, 0}} = Enum.at(entries, 2)
       assert {:commit, ^root} = Enum.at(entries, 3)
-      assert {:upsert, {3, _, _, _}} = Enum.at(entries, 4)
+      assert {:upsert, {"default", 3, _, _, _}} = Enum.at(entries, 4)
     end
 
     test "replays non-existent file as empty" do
@@ -189,7 +189,7 @@ defmodule MerkleDb.WALTest do
       path = wal_path("sync_test")
       {:ok, wal} = WAL.open(path, sync_mode: :batch)
 
-      WAL.append_upsert(wal, {1, [1.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 1, [1.0], %{}, 0})
       assert :ok = WAL.sync(wal)
 
       WAL.close(wal)
@@ -202,8 +202,8 @@ defmodule MerkleDb.WALTest do
 
       # Phase 1: Write some data
       {:ok, wal1} = WAL.open(path)
-      WAL.append_upsert(wal1, {1, [1.0, 2.0], %{"name" => "alice"}, 0})
-      WAL.append_upsert(wal1, {2, [3.0, 4.0], %{"name" => "bob"}, 0})
+      WAL.append_upsert(wal1, {"default", 1, [1.0, 2.0], %{"name" => "alice"}, 0})
+      WAL.append_upsert(wal1, {"default", 2, [3.0, 4.0], %{"name" => "bob"}, 0})
       root1 = Crypto.hash("commit1")
       WAL.append_commit(wal1, root1)
       WAL.sync(wal1)
@@ -211,8 +211,8 @@ defmodule MerkleDb.WALTest do
 
       # Phase 2: Write more data
       {:ok, wal2} = WAL.open(path)
-      WAL.append_upsert(wal2, {3, [5.0, 6.0], %{"name" => "charlie"}, 0})
-      WAL.append_delete(wal2, 1)
+      WAL.append_upsert(wal2, {"default", 3, [5.0, 6.0], %{"name" => "charlie"}, 0})
+      WAL.append_delete(wal2, {"default", 1, 0})
       WAL.sync(wal2)
       WAL.close(wal2)
 
@@ -239,7 +239,7 @@ defmodule MerkleDb.WALTest do
 
       # Write valid data
       {:ok, wal} = WAL.open(path)
-      WAL.append_upsert(wal, {1, [1.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 1, [1.0], %{}, 0})
       WAL.sync(wal)
       WAL.close(wal)
 
@@ -260,8 +260,8 @@ defmodule MerkleDb.WALTest do
 
       # Write valid data
       {:ok, wal} = WAL.open(path)
-      WAL.append_upsert(wal, {1, [1.0], %{}, 0})
-      WAL.append_upsert(wal, {2, [2.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 1, [1.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 2, [2.0], %{}, 0})
       WAL.sync(wal)
       WAL.close(wal)
 
@@ -282,9 +282,9 @@ defmodule MerkleDb.WALTest do
       path = wal_path("stats")
       {:ok, wal} = WAL.open(path)
 
-      WAL.append_upsert(wal, {1, [1.0], %{}, 0})
-      WAL.append_upsert(wal, {2, [2.0], %{}, 0})
-      WAL.append_delete(wal, 1)
+      WAL.append_upsert(wal, {"default", 1, [1.0], %{}, 0})
+      WAL.append_upsert(wal, {"default", 2, [2.0], %{}, 0})
+      WAL.append_delete(wal, {"default", 1, 0})
 
       stats = WAL.stats(wal)
 
@@ -300,10 +300,10 @@ defmodule MerkleDb.WALTest do
   defp recover_state(entries) do
     Enum.reduce(entries, %{records: %{}, commits: []}, fn entry, acc ->
       case entry do
-        {:upsert, {id, vector, payload, version}} ->
+        {:upsert, {collection, id, vector, payload, version}} ->
           put_in(acc, [:records, id], {vector, payload, version})
 
-        {:delete, id} ->
+        {:delete, {collection, id, version}} ->
           update_in(acc, [:records], &Map.delete(&1, id))
 
         {:commit, root} ->

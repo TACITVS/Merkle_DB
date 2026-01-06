@@ -9,7 +9,7 @@ DLL_OUT = $(PRIV_DIR)/merkle_nif.dll
 BLAKE3_DLL_OUT = $(PRIV_DIR)/blake3_nif.dll
 
 # Compiler Flags
-CFLAGS = -O3 -std=c11 -Wall -Wno-attributes -mavx2 -mfma -DBLAKE3_NO_AVX512
+CFLAGS = -O3 -std=c11 -Wall -Wno-attributes -mavx2 -DBLAKE3_NO_AVX512
 LDFLAGS = -shared
 # Includes for Erlang NIF headers and the library headers
 INCLUDES = -I"$(ERL_EI_INCLUDE_DIR)" -Inative -Inative/fp_lib/include
