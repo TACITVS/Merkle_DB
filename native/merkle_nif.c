@@ -187,6 +187,29 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_f32_batch(ErlNifEnv* env, int argc,
     return enif_make_binary(env, &scores_bin);
 }
 
+static ERL_NIF_TERM manual_nif_fp_vector_sum_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifUInt64 count, dim;
+    ErlNifBinary vectors_bin;
+
+    if (!enif_inspect_binary(env, argv[0], &vectors_bin)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[1], &count)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[2], &dim)) return enif_make_badarg(env);
+
+    if (vectors_bin.size != count * dim * 4) return enif_make_badarg(env);
+
+    ErlNifBinary output_bin;
+    if (!enif_alloc_binary(dim * 4, &output_bin)) return enif_make_badarg(env);
+
+    fp_vector_sum_f32(
+        (const float*)vectors_bin.data,
+        (float*)output_bin.data,
+        (size_t)count,
+        (size_t)dim
+    );
+
+    return enif_make_binary(env, &output_bin);
+}
+
 static ERL_NIF_TERM nif_fp_query_gemv_indexed(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     int dim_int;
     ErlNifUInt64 count, dim;
