@@ -28,6 +28,7 @@ Create a new vector collection.
 #   :max_vectors - integer, maximum capacity (default: 10_000_000)
 #   :index_type  - :flat | :ivf | :hnsw (default: :flat)
 #   :ivf_clusters - integer, number of IVF clusters (default: sqrt(max_vectors))
+#   :precision   - :f32 | :f64 (default: :f64) - f32 halves memory for embeddings
 #
 # Returns:
 #   {:ok, %Collection{}} on success
@@ -121,28 +122,16 @@ Get a record by ID, optionally from a specific snapshot.
 
 #### query/4
 
-Search for similar vectors.
+Search for similar vectors or concepts.
 
 ```elixir
-@spec query(collection, vector, top_k, opts) :: {:ok, results} | {:error, reason}
+@spec query(collection, query_input, top_k, opts) :: {:ok, results} | {:error, reason}
 
 # Parameters:
-#   collection - string
-#   vector     - list of floats, query vector
-#   top_k      - integer, number of results (1-1000)
-#   opts       - keyword list
-#
-# Options:
-#   :snapshot_root - binary, query specific snapshot
-#   :filter        - filter expression (see Filtering section)
-#   :include_vector - boolean, include vectors in results (default: false)
-#   :include_payload - boolean, include payload (default: true)
-#   :ef_search     - integer, HNSW search parameter
-#   :nprobe        - integer, IVF clusters to search
-#
-# Returns:
-#   {:ok, [%{id: id, score: float, payload: %{}, vector: [...]}]}
-#   Results sorted by score descending (higher = more similar)
+#   collection  - string, collection name
+#   query_input - list of floats (vector) OR string (semantic search text)
+#   top_k       - integer, number of results (1-1000)
+#   opts        - keyword list
 ```
 
 ### Snapshot Operations

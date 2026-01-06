@@ -39,6 +39,13 @@ Access over **180 specialized functions** for data science directly from Elixir:
 - **Statistics**: Mean, Variance, Moments, Correlation, and more across massive datasets.
 - **ML Primitives**: Ready-to-use kernels for building custom neural networks or models.
 
+### 5. Advanced Semantic Intelligence (Whole Book Search)
+MerkleDb is uniquely optimized for processing and searching entire books through a multi-level semantic pipeline:
+- **Sliding Window Ingestion**: Context-aware chunking that preserves semantic meaning across passage boundaries.
+- **Native f32 Storage**: Optimized for high-dimensional embeddings (BERT, GloVe), providing a **50% reduction in RAM usage** and significantly higher CPU cache hit rates.
+- **Hierarchical Topic Summarization**: Automated aggregation of passage vectors into Chapter and Book-level "Topic Vectors," enabling multi-level "Zoom-In" search.
+- **Universal Cross-Lingual Retrieval**: Concept-based searching that retrieves relevant passages regardless of the source language (e.g., search in English, find in Portuguese).
+
 ---
 
 ## ⚖️ Design Philosophy: Performance vs. Reliability
@@ -84,23 +91,20 @@ mix run gen_bridge.exs
 mix compile
 ```
 
-### Generic API Example
+### Semantic Search Example
 ```elixir
-alias MerkleDb.{Tree, Query, Analytics}
+alias MerkleDb.{KV, Query, Ingestor}
 
-# Create a new database
-tree = Tree.new()
+# 1. Ingest a book with sliding window (300-dim f32)
+KV.create_collection("library", dim: 300, precision: :f32)
+chunks = Ingestor.chunk_file("philosophy_book.txt", 200, 50)
+KV.put_batch("library", Enum.map(chunks, fn c -> {UUID.uuid4(), MerkleDb.TextEmbedding.embed(c), %{text: c}} end))
 
-# Insert vectors (64-dim in this case)
-vec = :binary.copy(<<1.0::little-float-64>>, 64)
-tree = Tree.insert(tree, "my-key-1", vec)
+# 2. Perform automated semantic search
+# No manual vectorization needed - MerkleDb handles it via GloVe/AVX2
+results = Query.execute(KV.snapshot("library"), [:semantic, "What is the meaning of life?", 5, 0.7])
 
-# Build an IVF Index for speed
-tree = Analytics.build_ivf_index(tree, 10)
-
-# Perform a high-speed KNN search
-results = Query.execute(tree, [:knn, query_vec, 5, 0.30])
-# Returns: [{"my-key-1", 0.98}, ...]
+# Returns passages across any language mapped in the vector space
 ```
 
 ---

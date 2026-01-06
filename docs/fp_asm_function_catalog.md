@@ -4,10 +4,10 @@ Generated: 2025-12-21 08:19:54
 Source: native/fp_lib/include (graphics/OpenGL/GPU/engine/graph headers excluded)
 
 ## Summary
-- Headers included: 24
+- Headers included: 25
 - Headers excluded: 12
-- Functions in scope (unique): 383
-- Functions currently exported: 180
+- Functions in scope (unique): 386
+- Functions currently exported: 183
 - Missing bindings: 203
 
 ## Excluded headers
@@ -462,6 +462,11 @@ Source: native/fp_lib/include (graphics/OpenGL/GPU/engine/graph headers excluded
 - fp_pca_generate_ellipse_data [exported]
 - fp_pca_generate_low_rank_data [exported]
 - fp_pca_fit_safe [missing]
+
+### fp_query.h (3 functions)
+- fp_dot_product_f32_avx2 [exported]
+- fp_query_gemv_f32_batch [exported]
+- fp_vector_sum_f32 [exported]
 
 ### fp_rng.h (0 functions)
 - None
