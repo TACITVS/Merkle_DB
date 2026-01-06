@@ -10,6 +10,100 @@ defmodule MerkleDb.Web.Router do
   plug :match
   plug :dispatch
 
+  # --- API V1 ---
+
+  get "/v1/collections" do
+    collections = KV.list_collections()
+    json = Jason.encode!(%{collections: collections})
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+  end
+
+  post "/v1/:collection/checkpoint" do
+    case KV.checkpoint(collection) do
+      :ok ->
+        send_resp(conn, 200, Jason.encode!(%{status: "ok", message: "Checkpoint created"}))
+      {:error, reason} ->
+        send_resp(conn, 500, Jason.encode!(%{error: inspect(reason)}))
+    end
+  end
+
+  post "/v1/:collection/vectors" do
+    {:ok, body, conn} = read_body(conn)
+    case Jason.decode(body) do
+      {:ok, items} when is_list(items) ->
+        # Expecting [{"id": "...", "vector": [...], "metadata": {...}}]
+        # OR [{"id": "...", "text": "...", "metadata": {...}}] for semantic ingest
+        
+        batch = Enum.map(items, fn item ->
+          id = item["id"]
+          meta = item["metadata"] || %{}
+          
+          vec = 
+            cond do
+              item["vector"] -> 
+                # Convert list of floats to binary
+                # Assume f32 for now, or detect? Let's use f32 as default for API V1
+                for f <- item["vector"], into: <<>>, do: <<f::float-little-32>>
+              
+              item["text"] ->
+                # Semantic embedding
+                TextEmbedding.embed(item["text"])
+                
+              true -> <<>>
+            end
+            
+          {id, vec, meta}
+        end)
+        
+        case KV.put_batch(collection, batch) do
+          :ok -> 
+            send_resp(conn, 200, Jason.encode!(%{status: "ok", count: length(batch)}))
+          {:error, reason} ->
+            send_resp(conn, 500, Jason.encode!(%{error: inspect(reason)}))
+        end
+        
+      _ ->
+        send_resp(conn, 400, "Invalid JSON body")
+    end
+  end
+
+  post "/v1/:collection/search" do
+    {:ok, body, conn} = read_body(conn)
+    params = case Jason.decode(body) do
+      {:ok, p} -> p
+      _ -> %{}
+    end
+    
+    k = params["k"] || 10
+    threshold = params["threshold"] || 0.0
+    
+    query = 
+      cond do
+        params["vector"] -> 
+          vec_bin = for f <- params["vector"], into: <<>>, do: <<f::float-little-32>>
+          [:knn, vec_bin, k, threshold]
+          
+        params["text"] ->
+          [:semantic, params["text"], k, threshold]
+          
+        true -> nil
+      end
+      
+    if query do
+      tree = KV.snapshot(collection)
+      results = Query.execute(tree, query)
+      
+      hits = Enum.map(results, fn {key, score} -> 
+        %{id: key, score: score}
+      end)
+      
+      json = Jason.encode!(%{results: hits})
+      conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+    else
+      send_resp(conn, 400, "Missing 'vector' or 'text' in body")
+    end
+  end
+
   # --- JOB CONTROLS ---
 
   post "/job/start" do
