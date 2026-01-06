@@ -44,6 +44,8 @@ static ERL_NIF_TERM nif_fp_quantize_f32_to_u8(ErlNifEnv* env, int argc, const ER
 static ERL_NIF_TERM nif_fp_query_gemv_quantized(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM manual_nif_fp_query_gemv_quantized_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_sparse_dotp(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM manual_nif_fp_mmap_open(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM manual_nif_fp_query_gemv_mmap_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_create(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_insert(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
@@ -2052,6 +2054,8 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"fp_query_gemv_quantized", 5, nif_fp_query_gemv_quantized, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_query_gemv_quantized_f32", 5, manual_nif_fp_query_gemv_quantized_f32, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_sparse_dotp", 4, nif_fp_sparse_dotp, 0},
+    {"fp_mmap_open", 1, manual_nif_fp_mmap_open, 0},
+    {"fp_query_gemv_mmap_f32", 4, manual_nif_fp_query_gemv_mmap_f32, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_hnsw_create", 4, nif_fp_hnsw_create, 0},
     {"fp_hnsw_insert", 5, nif_fp_hnsw_insert, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_hnsw_search", 6, nif_fp_hnsw_search, ERL_NIF_DIRTY_JOB_CPU_BOUND},

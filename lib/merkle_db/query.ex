@@ -508,13 +508,24 @@ defmodule MerkleDb.Query do
       if where_filter == nil do
         _search_k = trunc(k * 1.5) + 1
         
+        # Check if columns are mmap resources (references) or binaries
+        is_mmap = is_reference(elem(tree.columns, 0))
+
         scores_bin = 
-          if tree.precision == :f32 do
-            # Use our new f32 batch kernel (batch of 1)
-            # Tree.flatten returns f32 if tree is f32
-            ASM.fp_query_gemv_f32_batch(Tree.flatten(tree), q_norm_bin, count, dim)
-          else
-            ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
+          cond do
+            is_mmap and tree.precision == :f32 ->
+              ASM.fp_query_gemv_mmap_f32(tree.columns, q_norm_bin, count, dim)
+            
+            is_mmap ->
+              raise "Mmap search only supported for f32 precision in V1"
+
+            tree.precision == :f32 ->
+              # Use our new f32 batch kernel (batch of 1)
+              # Tree.flatten returns f32 if tree is f32
+              ASM.fp_query_gemv_f32_batch(Tree.flatten(tree), q_norm_bin, count, dim)
+            
+            true ->
+              ASM.fp_query_gemv_columnar(tree.columns, q_norm_bin, count, dim)
           end
 
         # Top-K selection NIF expects f64 or f32? 

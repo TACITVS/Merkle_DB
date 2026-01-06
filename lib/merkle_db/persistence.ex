@@ -95,9 +95,10 @@ defmodule MerkleDb.Persistence do
     {:ok, dir}
   end
 
-  def load_checkpoint(collection) do
+  def load_checkpoint(collection, opts \\ []) do
     dir = checkpoint_dir(collection)
     meta_path = Path.join(dir, "metadata.term")
+    mode = Keyword.get(opts, :mode, :memory) # :memory or :mmap
 
     if File.exists?(meta_path) do
       # 1. Load Metadata
@@ -108,7 +109,14 @@ defmodule MerkleDb.Persistence do
       columns = 
         for i <- 0..(tree.dim - 1) do
           col_path = Path.join(dir, "col_#{i}.bin")
-          File.read!(col_path)
+          if mode == :mmap do
+             case MerkleDb.ASM.fp_mmap_open(col_path) do
+               {:ok, res} -> res
+               _ -> raise "Failed to mmap column #{i}"
+             end
+          else
+             File.read!(col_path)
+          end
         end
         |> List.to_tuple()
 
