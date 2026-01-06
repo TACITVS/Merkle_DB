@@ -25,7 +25,7 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, precision: :f64, centroids: nil, clusters: %{}, generation: 0, last_wal_version: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, inverted_index: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, precision: :f64, centroids: nil, clusters: %{}, generation: 0, last_wal_version: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -60,6 +60,7 @@ defmodule MerkleDb.Tree do
       key_index: %{},
       tombstones: MapSet.new(),
       metadata: %{},
+      inverted_index: %{},
       quantized: nil,
       hnsw: nil,
       sparse_vectors: %{},
@@ -289,14 +290,33 @@ defmodule MerkleDb.Tree do
     new_keys = Map.put(tree.keys, new_idx, key)
     new_key_index = Map.put(tree.key_index, key, new_idx)
     new_metadata = if meta == %{}, do: tree.metadata, else: Map.put(tree.metadata, new_idx, meta)
+    
+    new_inverted = update_inverted_index(tree.inverted_index, new_idx, meta)
 
-    temp_tree = %{tree | count: new_idx + 1, columns: new_cols, keys: new_keys, key_index: new_key_index, metadata: new_metadata}
+    temp_tree = %{tree | count: new_idx + 1, columns: new_cols, keys: new_keys, key_index: new_key_index, metadata: new_metadata, inverted_index: new_inverted}
     estimated_mb = estimate_memory_mb(temp_tree)
     if estimated_mb > @max_tree_size_gb * 1024 do
       raise ArgumentError, "Tree memory limit reached: #{estimated_mb}MB > #{@max_tree_size_gb}GB"
     end
 
     %{temp_tree | generation: tree.generation + 1}
+  end
+
+  defp update_inverted_index(index, idx, metadata) do
+    Enum.reduce(metadata, index, fn {field, value}, acc_index ->
+      # Ensure field map exists
+      field_map = Map.get(acc_index, field, %{})
+      
+      # Ensure bitmap exists (default empty)
+      bitmap = Map.get(field_map, value, <<>>)
+      
+      # Update bitmap (Copy-on-Write via NIF)
+      new_bitmap = MerkleDb.ASM.fp_bitmap_set(bitmap, idx)
+      
+      # Update nested structure
+      new_field_map = Map.put(field_map, value, new_bitmap)
+      Map.put(acc_index, field, new_field_map)
+    end)
   end
 
   defp to_f64_list(input, expected_dim) do

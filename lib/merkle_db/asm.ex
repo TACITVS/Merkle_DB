@@ -599,6 +599,10 @@ def fp_mmap_open(_path), do: :erlang.nif_error(:nif_not_loaded)
 def fp_query_gemv_mmap_f32(_mmap_resources_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_bitmasked_f32"
 def fp_query_gemv_bitmasked_f32(_columns_tuple, _query_bin, _bitmap_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_bitmap_set"
+def fp_bitmap_set(_bitmap_bin, _index), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_bitmap_and"
+def fp_bitmap_and(_bitmap_a, _bitmap_b), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_create"
 def fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_insert"

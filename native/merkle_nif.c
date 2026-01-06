@@ -786,6 +786,59 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_bitmasked_f32(ErlNifEnv* env, int a
     return enif_make_binary(env, &scores_bin);
 }
 
+// --- BITMAP NIFS (Functional/Immutable) ---
+
+static ERL_NIF_TERM manual_nif_fp_bitmap_set(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary in_bin;
+    ErlNifUInt64 index;
+
+    if (!enif_inspect_binary(env, argv[0], &in_bin)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[1], &index)) return enif_make_badarg(env);
+
+    // FP Principle: Immutability. We cannot modify in_bin.data in place.
+    // We must allocate a new binary (Copy-on-Write).
+    
+    // Check if index is within bounds of the *current* binary size.
+    // If input is empty or too small, we might need to resize (reallocate larger).
+    // For simplicity in this kernel, we assume the user manages size or we resize if needed.
+    // Let's assume resize logic: required bytes = (index / 64 + 1) * 8.
+    
+    size_t required_bytes = ((index / 64) + 1) * 8;
+    size_t new_size = (in_bin.size > required_bytes) ? in_bin.size : required_bytes;
+
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary(new_size, &out_bin)) return enif_make_badarg(env);
+
+    // 1. Copy existing data (Copy)
+    // Initialize new space to 0 if we grew
+    memset(out_bin.data, 0, new_size);
+    if (in_bin.size > 0) {
+        memcpy(out_bin.data, in_bin.data, in_bin.size);
+    }
+
+    // 2. Mutate the NEW copy (Write)
+    fp_bitmap_set((uint64_t*)out_bin.data, (size_t)index);
+
+    // 3. Return new value (Immutable output)
+    return enif_make_binary(env, &out_bin);
+}
+
+static ERL_NIF_TERM manual_nif_fp_bitmap_and(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary a_bin, b_bin;
+
+    if (!enif_inspect_binary(env, argv[0], &a_bin)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &b_bin)) return enif_make_badarg(env);
+
+    size_t size = (a_bin.size < b_bin.size) ? a_bin.size : b_bin.size;
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary(size, &out_bin)) return enif_make_badarg(env);
+
+    size_t n_u64 = size / 8;
+    fp_bitmap_and((const uint64_t*)a_bin.data, (const uint64_t*)b_bin.data, (uint64_t*)out_bin.data, n_u64);
+
+    return enif_make_binary(env, &out_bin);
+}
+
 static ERL_NIF_TERM nif_fp_pca_transform_result(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     PCAResult* res;
     ErlNifBinary data_bin;
