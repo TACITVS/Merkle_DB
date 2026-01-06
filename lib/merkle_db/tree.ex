@@ -25,7 +25,7 @@ defmodule MerkleDb.Tree do
   - clusters: IVF index cluster assignments (optional).
   """
 
-  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, centroids: nil, clusters: %{}, generation: 0, last_wal_version: 0
+  defstruct columns: nil, keys: %{}, key_index: %{}, tombstones: nil, metadata: %{}, quantized: nil, hnsw: nil, sparse_vectors: %{}, count: 0, dim: 0, precision: :f64, centroids: nil, clusters: %{}, generation: 0, last_wal_version: 0
 
   # Memory limits
   @max_tree_size_gb 10
@@ -46,9 +46,13 @@ defmodule MerkleDb.Tree do
     for f <- floats, into: <<>>, do: <<f::little-float-size(64)>>
   end
 
-  def new do
+  def new(opts \\ []) do
+    dim = Keyword.get(opts, :dim, 0)
+    precision = Keyword.get(opts, :precision, :f64)
+    cols = if dim > 0, do: List.to_tuple(for _ <- 1..dim, do: <<>>), else: nil
+
     %MerkleDb.Tree{
-      columns: nil,
+      columns: cols,
       keys: %{},
       key_index: %{},
       tombstones: MapSet.new(),
@@ -57,7 +61,8 @@ defmodule MerkleDb.Tree do
       hnsw: nil,
       sparse_vectors: %{},
       count: 0,
-      dim: 0,
+      dim: dim,
+      precision: precision,
       centroids: nil,
       clusters: %{},
       generation: 0,
@@ -221,8 +226,19 @@ defmodule MerkleDb.Tree do
       raise ArgumentError, "Tree size limit reached: #{@max_vector_count} vectors"
     end
 
-    vector_bin = if is_list(vector_input), do: floats_to_binary(vector_input), else: vector_input
-    floats = for <<x::little-float-size(64) <- vector_bin>>, do: x
+    # Handle f32/f64 binary conversion
+    floats = 
+      cond do
+        is_list(vector_input) -> 
+          vector_input
+        is_binary(vector_input) and tree.dim > 0 and byte_size(vector_input) == tree.dim * 4 ->
+          for <<f::float-little-32 <- vector_input>>, do: f
+        is_binary(vector_input) ->
+          for <<f::float-little-64 <- vector_input>>, do: f
+        true ->
+          raise ArgumentError, "Invalid vector input"
+      end
+
     dim = length(floats)
     floats = normalize_vector(floats)
 
@@ -263,6 +279,17 @@ defmodule MerkleDb.Tree do
     %{temp_tree | generation: tree.generation + 1}
   end
 
+  defp to_f64_list(input, expected_dim) do
+    cond do
+      is_list(input) -> input
+      is_binary(input) and expected_dim > 0 and byte_size(input) == expected_dim * 4 ->
+        for <<f::float-little-32 <- input>>, do: f
+      is_binary(input) ->
+        for <<f::float-little-64 <- input>>, do: f
+      true -> nil
+    end
+  end
+
   @doc """
   Batch insert multiple vectors. ~50x faster than individual inserts.
   Handles updates by tombstoning old indices for existing keys.
@@ -275,17 +302,25 @@ defmodule MerkleDb.Tree do
       raise ArgumentError, "Batch would exceed tree size limit: #{new_count} > #{@max_vector_count}"
     end
 
-    normalized_input = 
-      for item <- key_vector_pairs do
-        case item do
-          {k, v} -> {k, v, %{}}
-          {k, v, m} -> {k, v, m}
+    # Determine dim from first vector if not already set
+    {_k, first_v, _m} = case List.first(key_vector_pairs) do
+      {k, v} -> {k, v, %{}}
+      {k, v, m} -> {k, v, m}
+    end
+    
+    first_floats = 
+      if tree.dim > 0 do
+        to_f64_list(first_v, tree.dim)
+      else
+        # Try f32 first if size matches common embed dims (300, 384, 768, 1024, 1536)
+        if is_binary(first_v) and byte_size(first_v) in [1200, 1536, 3072, 4096, 6144] do
+           for <<f::float-little-32 <- first_v>>, do: f
+        else
+           to_f64_list(first_v, 0)
         end
       end
-
-    {_first_key, first_vec_bin, _first_meta} = List.first(normalized_input)
-    floats = for <<x::little-float-size(64) <- first_vec_bin>>, do: x
-    dim = length(floats)
+    
+    dim = length(first_floats)
 
     tree = if tree.columns == nil do
       %{tree | dim: dim, columns: List.to_tuple(for _ <- 1..dim, do: <<>>)}
@@ -295,8 +330,14 @@ defmodule MerkleDb.Tree do
     end
 
     normalized_triplets = 
-      for {key, vec_bin, meta} <- normalized_input do
-        floats = for <<x::little-float-size(64) <- vec_bin>>, do: x
+      for item <- key_vector_pairs do
+        {key, vec_input, meta} = case item do
+          {k, v} -> {k, v, %{}}
+          {k, v, m} -> {k, v, m}
+        end
+        floats = to_f64_list(vec_input, tree.dim)
+        if length(floats) != tree.dim, do: raise ArgumentError, "Dimension mismatch in batch"
+        
         norm_floats = normalize_vector(floats)
         norm_bin = floats_to_binary(norm_floats)
         {key, norm_bin, meta}

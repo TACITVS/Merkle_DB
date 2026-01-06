@@ -581,6 +581,8 @@ def fp_job_cancel(_job), do: :erlang.nif_error(:nif_not_loaded)
 def fp_query_gemv_columnar_batch(_columns_tuple, _queries_bin, _batch_count, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_f32_batch"
 def fp_query_gemv_f32_batch(_db_vectors_bin, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_vector_sum_f32"
+def fp_vector_sum_f32(_vectors_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_quantize_f64_to_u8"
 def fp_quantize_f64_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_quantized"

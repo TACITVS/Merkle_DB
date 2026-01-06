@@ -1,44 +1,97 @@
 defmodule MerkleDb.TextEmbedding do
-  alias MerkleDb.FPDispatcher
+  @moduledoc """
+  High-performance text embedding using GloVe pre-trained vectors.
+  Uses ETS for O(1) lookup and AVX2-accelerated NIFs for vector aggregation.
+  """
 
-  @dim 64
-  @bytes_per_float 8
-  @vec_size @dim * @bytes_per_float
+  alias MerkleDb.ASM
 
-  def embed(text) do
-    # 1. Tokenize and count (Accumulate)
-    # We do this in Elixir for simplicity, though C would be faster.
-    raw_counts = 
+  @table :glove_vectors
+  @dim 300
+  @glove_url "https://nlp.stanford.edu/data/glove.6B.zip"
+  
+  defp glove_file do
+    System.get_env("GLOVE_FILE") || "data/glove.6B.300d.txt"
+  end
+
+  # --- API ---
+
+  @doc "Ensures GloVe vectors are loaded into ETS."
+  def init do
+    if :ets.whereis(@table) == :undefined do
+      :ets.new(@table, [:named_table, :public, {:read_concurrency, true}])
+      load_glove()
+    else
+      :ok
+    end
+  end
+
+  @doc "Converts a string of text into a fixed-size embedding vector (f32 binary)."
+  def embed(text) when is_binary(text) do
+    init()
+
+    # Simple tokenizer: lowercase and split by non-alphanumeric
+    words = 
       text
       |> String.downcase()
       |> String.split(~r/[^a-z0-9]+/, trim: true)
-      |> Enum.reduce(%{}, fn word, acc -> 
-        idx = :erlang.phash2(word, @dim)
-        Map.update(acc, idx, 1.0, &(&1 + 1.0))
-      end)
-    
-    # 2. Construct binary vector
-    # This is O(dim), fast enough for 64 dims.
-    vec_bin = 
-      for i <- 0..(@dim-1), into: <<>> do
-        val = Map.get(raw_counts, i, 0.0)
-        <<val::little-float-size(64)>>
-      end
 
-    # 3. Normalize (L2 Norm) using ASM
-    # norm = sqrt(sum(x^2))
-    # We use dot product with itself to get sum of squares
-    sum_sq = FPDispatcher.call(:fp_fold_dotp_f64, [vec_bin, vec_bin, @dim])
-    
-    if sum_sq > 0.0 do
-      norm = :math.sqrt(sum_sq)
-      scale = 1.0 / norm
-      
-      # Use ASM to scale
-      # fp_map_scale_f64(in, size, n, scale) -> returns binary
-      FPDispatcher.call(:fp_map_scale_f64, [vec_bin, @vec_size, @dim, scale])
-    else
-      vec_bin
+    # Lookup vectors for each word
+    vectors = 
+      Enum.reduce(words, [], fn word, acc ->
+        case :ets.lookup(@table, word) do
+          [{^word, vec}] -> [vec | acc]
+          [] -> acc
+        end
+      end)
+
+    case length(vectors) do
+      0 -> zero_vector()
+      count -> aggregate_vectors(vectors, count)
     end
+  end
+
+  @doc "Converts an f32 binary vector to f64 binary vector."
+  def to_f64(vec_f32) do
+    for <<f::float-little-32 <- vec_f32>>, into: <<>>, do: <<f::float-little-64>>
+  end
+
+  # --- Internal Helpers ---
+
+  defp load_glove do
+    file = glove_file()
+    if File.exists?(file) do
+      IO.puts "--- Loading GloVe Vectors (300d) into ETS... ---"
+      File.stream!(file)
+      |> Stream.each(fn line ->
+        [word | values] = line |> String.trim() |> String.split(" ", trim: true)
+        # Convert values to f32 little-endian binary
+        bin = for v <- values, into: <<>>, do: <<String.to_float(v)::float-little-32>>
+        :ets.insert(@table, {word, bin})
+      end)
+      |> Stream.run()
+      IO.puts "✅ Loaded #{:ets.info(@table, :size)} words into memory."
+    else
+      IO.puts "❌ GloVe file not found at #{file}"
+      IO.puts "Please download it from #{@glove_url} and place the 300d file in data/"
+    end
+  end
+
+  defp aggregate_vectors(vectors, count) do
+    # Concatenate all vectors into one large binary
+    # vectors is a list of 300-float binaries (1200 bytes each)
+    batch_bin = IO.iodata_to_binary(vectors)
+
+    # Use our AVX2 NIF to sum them all
+    sum_vec = ASM.fp_vector_sum_f32(batch_bin, count, @dim)
+
+    # Average by scaling by 1/count
+    # Note: scaling by 1.0/count
+    # NIF signature: fp_map_scale_f32(input_bin, output_size, n, scale)
+    ASM.fp_map_scale_f32(sum_vec, @dim * 4, @dim, 1.0 / count)
+  end
+
+  defp zero_vector do
+    for _ <- 1..@dim, into: <<>>, do: <<0.0::float-little-32>>
   end
 end

@@ -30,9 +30,9 @@ defmodule MerkleDb.KV do
     GenServer.call(__MODULE__, {:delete, collection, key})
   end
 
-  @doc "Create a new collection"
-  def create_collection(name) do
-    GenServer.call(__MODULE__, {:create_collection, name})
+  @doc "Create a new collection with optional parameters (e.g. dim, precision)"
+  def create_collection(name, opts \\ []) do
+    GenServer.call(__MODULE__, {:create_collection, name, opts})
   end
 
   @doc "Drop a collection (delete from memory and disk)"
@@ -162,11 +162,11 @@ defmodule MerkleDb.KV do
   # --- Collection Management ---
 
   @impl true
-  def handle_call({:create_collection, name}, _from, collections) do
+  def handle_call({:create_collection, name, opts}, _from, collections) do
     if Map.has_key?(collections, name) do
       {:reply, {:error, :already_exists}, collections}
     else
-      new_tree = Tree.new()
+      new_tree = Tree.new(opts)
       {:reply, :ok, Map.put(collections, name, new_tree)}
     end
   end

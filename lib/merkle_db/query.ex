@@ -3,7 +3,7 @@ defmodule MerkleDb.Query do
   Vector query execution with IVF indexing, parallel search, and payload filtering.
   """
 
-  alias MerkleDb.{Tree, ASM, Telemetry, VectorCache, PayloadStore}
+  alias MerkleDb.{Tree, ASM, Telemetry, VectorCache, PayloadStore, TextEmbedding}
 
   @doc """
   Execute a query against the tree.
@@ -15,6 +15,9 @@ defmodule MerkleDb.Query do
   - [:knn, query_vec, k, threshold, :parallel] - Parallel IVF search across top clusters
   - [:knn, query_vec, k, threshold, :cached] - Cache-aware search
   - [:knn, query_vec, k, threshold, {:where, filters}] - KNN with metadata filtering
+
+  ### Semantic Search
+  - [:semantic, "text query", k, threshold] - Automated text-to-vector embedding using GloVe
 
   ### Range Queries
   - [:range, query_vec, min_sim, max_sim] - All vectors with similarity in [min_sim, max_sim]
@@ -39,6 +42,18 @@ defmodule MerkleDb.Query do
       case query do
         [:knn, query_vec, k, threshold | opts] ->
           if tree.count == 0, do: [], else: do_knn(tree, query_vec, k, threshold, opts)
+
+        [:semantic, text, k, threshold | opts] ->
+          if tree.count == 0 do
+            []
+          else
+            # 1. Embed text to f32
+            vec_f32 = TextEmbedding.embed(text)
+            # 2. Convert to f64 for current DB compatibility
+            query_vec = TextEmbedding.to_f64(vec_f32)
+            # 3. Execute as KNN
+            do_knn(tree, query_vec, k, threshold, opts)
+          end
 
         [:range, query_vec, min_sim, max_sim | opts] ->
           if tree.count == 0, do: [], else: do_range(tree, query_vec, min_sim, max_sim, opts)
@@ -118,6 +133,7 @@ defmodule MerkleDb.Query do
     {type, k, threshold} =
       case query do
         [:knn, _query_vec, k, th | _] -> {:knn, k, th}
+        [:semantic, _text, k, th | _] -> {:semantic, k, th}
         [:range, _query_vec, _min_sim, max_sim | _] -> {:range, 0, max_sim}
         [:sparse, _sparse_query, k, th] -> {:sparse, k, th}
         [:hybrid, _query_vec, _sparse_query, k, th | _] -> {:hybrid, k, th}
@@ -154,7 +170,7 @@ defmodule MerkleDb.Query do
     results
   end
 
-  defp do_hybrid(tree, query_vec, sparse_query, k, threshold, opts) do
+  defp do_hybrid(tree, query_vec, sparse_query, k, _threshold, opts) do
     # 1. Get dense and sparse results (oversample for better fusion)
     # We take k*2 to have enough overlap for RRF
     dense_results = do_knn(tree, query_vec, k * 2, 0.0, opts)
