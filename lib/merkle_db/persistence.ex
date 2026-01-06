@@ -41,18 +41,27 @@ defmodule MerkleDb.Persistence do
     dir = snapshot_dir()
     case File.ls(dir) do
       {:ok, files} ->
-        files
-        |> Enum.filter(&String.starts_with?(&1, "snapshot-"))
-        |> Enum.filter(&String.ends_with?(&1, "-current.bin"))
-        |> Enum.map(fn filename ->
-          # snapshot-<name>-current.bin
-          len = String.length(filename)
-          if len > 21 do
-            String.slice(filename, 9, len - 21)
-          else
-            nil # Ignore malformed or legacy files like "snapshot-current.bin"
-          end
-        end)
+        snapshots = 
+          files
+          |> Enum.filter(&String.starts_with?(&1, "snapshot-"))
+          |> Enum.filter(&String.ends_with?(&1, "-current.bin"))
+          |> Enum.map(fn filename ->
+            len = String.length(filename)
+            if len > 21 do
+              String.slice(filename, 9, len - 21)
+            else
+              nil
+            end
+          end)
+
+        checkpoints =
+          files
+          |> Enum.filter(&String.starts_with?(&1, "checkpoint-"))
+          |> Enum.map(fn filename ->
+            String.slice(filename, 11, String.length(filename))
+          end)
+
+        (snapshots ++ checkpoints)
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 
