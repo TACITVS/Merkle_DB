@@ -459,13 +459,35 @@ static ERL_NIF_TERM nif_fp_hnsw_insert(ErlNifEnv* env, int argc, const ERL_NIF_T
     enif_get_tuple(env, argv[3], &dim_int, &tuple_elements);
     
     ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
+    double** converted_columns = NULL;
+
     for (int d = 0; d < dim; d++) {
         enif_inspect_binary(env, tuple_elements[d], &col_bins[d]);
-        columns[d] = (const double*)col_bins[d].data;
+        if (col_bins[d].size == db_count * 4) {
+            // f32 detected
+            if (converted_columns == NULL) {
+                converted_columns = malloc(dim * sizeof(double*));
+                for(int j=0; j<dim; j++) converted_columns[j] = NULL;
+            }
+            converted_columns[d] = malloc(db_count * sizeof(double));
+            float* src = (float*)col_bins[d].data;
+            for (size_t i = 0; i < db_count; i++) {
+                converted_columns[d][i] = (double)src[i];
+            }
+            columns[d] = converted_columns[d];
+        } else {
+            columns[d] = (const double*)col_bins[d].data;
+        }
     }
 
     fp_hnsw_insert(res->index, vector_idx, (const double*)vec_bin.data, columns, (size_t)db_count);
 
+    if (converted_columns) {
+        for (int d = 0; d < dim; d++) {
+            if (converted_columns[d]) free(converted_columns[d]);
+        }
+        free(converted_columns);
+    }
     free(columns);
     free(col_bins);
 
@@ -493,9 +515,25 @@ static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_T
     enif_get_tuple(env, argv[4], &dim_int, &tuple_elements);
     
     ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
+    double** converted_columns = NULL;
+
     for (int d = 0; d < dim; d++) {
         enif_inspect_binary(env, tuple_elements[d], &col_bins[d]);
-        columns[d] = (const double*)col_bins[d].data;
+        if (col_bins[d].size == db_count * 4) {
+            // f32 detected
+            if (converted_columns == NULL) {
+                converted_columns = malloc(dim * sizeof(double*));
+                for(int j=0; j<dim; j++) converted_columns[j] = NULL;
+            }
+            converted_columns[d] = malloc(db_count * sizeof(double));
+            float* src = (float*)col_bins[d].data;
+            for (size_t i = 0; i < db_count; i++) {
+                converted_columns[d][i] = (double)src[i];
+            }
+            columns[d] = converted_columns[d];
+        } else {
+            columns[d] = (const double*)col_bins[d].data;
+        }
     }
 
     int32_t* results_indices = malloc(k * sizeof(int32_t));
@@ -512,6 +550,12 @@ static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_T
         results_scores
     );
 
+    if (converted_columns) {
+        for (int d = 0; d < dim; d++) {
+            if (converted_columns[d]) free(converted_columns[d]);
+        }
+        free(converted_columns);
+    }
     free(columns);
     free(col_bins);
 

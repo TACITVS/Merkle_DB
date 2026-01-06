@@ -42,8 +42,11 @@ defmodule MerkleDb.Tree do
   end
 
   # Convert normalized floats back to binary
-  defp floats_to_binary(floats) do
-    for f <- floats, into: <<>>, do: <<f::little-float-size(64)>>
+  defp floats_to_binary(floats, precision) do
+    case precision do
+      :f32 -> for f <- floats, into: <<>>, do: <<f::little-float-size(32)>>
+      :f64 -> for f <- floats, into: <<>>, do: <<f::little-float-size(64)>>
+    end
   end
 
   def new(opts \\ []) do
@@ -169,13 +172,19 @@ defmodule MerkleDb.Tree do
     hnsw_res = MerkleDb.ASM.fp_hnsw_create(tree.dim, m, ef_construction, tree.count + 1000)
     
     # 2. Insert all vectors
-    # We need row-major flattening for efficient insertion
-    # OR we can extract them one by one (slow but simple)
     flat_data = flatten(tree)
+    elem_size = if tree.precision == :f32, do: 4, else: 8
     
     Enum.each(0..(tree.count - 1), fn idx ->
-      vec_bin = binary_part(flat_data, idx * tree.dim * 8, tree.dim * 8)
-      MerkleDb.ASM.fp_hnsw_insert(hnsw_res, idx, vec_bin, tree.columns, tree.count)
+      vec_bin = binary_part(flat_data, idx * tree.dim * elem_size, tree.dim * elem_size)
+      if tree.precision == :f32 do
+        # HNSW implementation in merkle_nif.c currently expects f64 binaries for insertion.
+        # We must convert to f64 for the HNSW indexer even if stored as f32 in tree.
+        vec_f64 = for <<f::float-little-32 <- vec_bin>>, into: <<>>, do: <<f::float-little-64>>
+        MerkleDb.ASM.fp_hnsw_insert(hnsw_res, idx, vec_f64, tree.columns, tree.count)
+      else
+        MerkleDb.ASM.fp_hnsw_insert(hnsw_res, idx, vec_bin, tree.columns, tree.count)
+      end
     end)
     
     %{tree | hnsw: hnsw_res, generation: tree.generation + 1}
@@ -261,7 +270,10 @@ defmodule MerkleDb.Tree do
       |> Tuple.to_list()
       |> Enum.zip(floats)
       |> Enum.map(fn {col_bin, val} ->
-         <<col_bin::binary, val::little-float-size(64)>>
+         case tree.precision do
+           :f32 -> <<col_bin::binary, val::little-float-size(32)>>
+           :f64 -> <<col_bin::binary, val::little-float-size(64)>>
+         end
       end)
       |> List.to_tuple()
 
@@ -329,6 +341,8 @@ defmodule MerkleDb.Tree do
       tree
     end
 
+    elem_size = if tree.precision == :f32, do: 4, else: 8
+
     normalized_triplets = 
       for item <- key_vector_pairs do
         {key, vec_input, meta} = case item do
@@ -339,7 +353,7 @@ defmodule MerkleDb.Tree do
         if length(floats) != tree.dim, do: raise ArgumentError, "Dimension mismatch in batch"
         
         norm_floats = normalize_vector(floats)
-        norm_bin = floats_to_binary(norm_floats)
+        norm_bin = floats_to_binary(norm_floats, tree.precision)
         {key, norm_bin, meta}
       end
 
@@ -356,7 +370,7 @@ defmodule MerkleDb.Tree do
       for dim_idx <- 0..(tree.dim - 1) do
         col_bin = elem(tree.columns, dim_idx)
         new_values = for {_key, vec_bin, _meta} <- normalized_triplets do
-          binary_part(vec_bin, dim_idx * 8, 8)
+          binary_part(vec_bin, dim_idx * elem_size, elem_size)
         end
         IO.iodata_to_binary([col_bin | new_values])
       end
@@ -425,15 +439,10 @@ defmodule MerkleDb.Tree do
     @doc """
     Estimate memory usage in MB.
     """
-    def estimate_memory_mb(%__MODULE__{count: count, dim: dim} = tree) do
-      # columns: count * dim * 8 bytes (f64)
-      # keys: count * ~50 bytes (average key size + map overhead)
-      # key_index: count * ~50 bytes (inverse of keys)
-      # metadata: active_count * ~100 bytes (approx)
-      # quantized: count * dim bytes (u8) + overhead
-      # hnsw: approximated as count * M * 4 bytes * layers
-      
-      columns_mb = (count * dim * 8) / (1024 * 1024)
+    def estimate_memory_mb(%__MODULE__{count: count, dim: dim, precision: prec} = tree) do
+      # columns: count * dim * size bytes
+      elem_size = if prec == :f32, do: 4, else: 8
+      columns_mb = (count * dim * elem_size) / (1024 * 1024)
       keys_mb = (count * 50) / (1024 * 1024)
       key_index_mb = (count * 50) / (1024 * 1024)
       
@@ -464,6 +473,7 @@ defmodule MerkleDb.Tree do
       count: tree.count,
       active_count: tree.count - MapSet.size(tree.tombstones || MapSet.new()),
       dimensions: tree.dim,
+      precision: tree.precision,
       memory_mb: estimate_memory_mb(tree),
       has_ivf_index: tree.centroids != nil,
       cluster_count: map_size(tree.clusters),
@@ -476,15 +486,16 @@ defmodule MerkleDb.Tree do
   end
 
   @doc """
-  Flatten columnar storage into row-major binary (f64).
+  Flatten columnar storage into row-major binary.
   """
   def flatten(%__MODULE__{columns: nil}), do: <<>>
   def flatten(%__MODULE__{count: 0}), do: <<>>
-  def flatten(%__MODULE__{count: count, dim: dim} = tree) when count > 0 and dim > 0 do
+  def flatten(%__MODULE__{count: count, dim: dim, precision: prec} = tree) when count > 0 and dim > 0 do
+    elem_size = if prec == :f32, do: 4, else: 8
     for i <- 0..(count - 1), into: <<>> do
       for d <- 0..(dim - 1), into: <<>> do
         col = elem(tree.columns, d)
-        binary_part(col, i * 8, 8)
+        binary_part(col, i * elem_size, elem_size)
       end
     end
   end
