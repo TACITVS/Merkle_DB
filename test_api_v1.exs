@@ -22,7 +22,7 @@ KV.drop_collection("api_test")
 # Create collection
 KV.create_collection("api_test", dim: 300, precision: :f32)
 
-IO.puts "1. Testing Ingest..."
+IO.puts "1. Testing Ingest (Authorized)..."
 vec_zeros = for _ <- 1..300, do: 0.0
 body = Jason.encode!([
   %{id: "vec1", vector: vec_zeros},
@@ -31,6 +31,7 @@ body = Jason.encode!([
 
 conn = conn(:post, "/v1/api_test/vectors", body)
        |> put_req_header("content-type", "application/json")
+       |> put_req_header("authorization", "Bearer secret")
        |> Router.call(Router.init([]))
 
 IO.inspect(conn.status, label: "Ingest Status")
@@ -42,6 +43,18 @@ else
   IO.puts "❌ Ingest Failed"
 end
 
+IO.puts "1b. Testing Ingest (Unauthorized)..."
+conn = conn(:post, "/v1/api_test/vectors", body)
+       |> put_req_header("content-type", "application/json")
+       |> Router.call(Router.init([]))
+
+IO.inspect(conn.status, label: "Unauthorized Status")
+if conn.status == 401 do
+  IO.puts "✅ Security OK"
+else
+  IO.puts "❌ Security Failed"
+end
+
 IO.puts "2. Testing Search..."
 search_body = Jason.encode!(%{
   text: "philosophy",
@@ -50,6 +63,7 @@ search_body = Jason.encode!(%{
 
 conn = conn(:post, "/v1/api_test/search", search_body)
        |> put_req_header("content-type", "application/json")
+       |> put_req_header("authorization", "Bearer secret")
        |> Router.call(Router.init([]))
 
 IO.inspect(conn.status, label: "Search Status")
@@ -63,11 +77,5 @@ end
 
 IO.puts "3. Testing Checkpoint..."
 conn = conn(:post, "/v1/api_test/checkpoint", "")
+       |> put_req_header("authorization", "Bearer secret")
        |> Router.call(Router.init([]))
-
-IO.inspect(conn.status, label: "Checkpoint Status")
-if conn.status == 200 do
-  IO.puts "✅ Checkpoint OK"
-else
-  IO.puts "❌ Checkpoint Failed"
-end

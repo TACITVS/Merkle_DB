@@ -1,6 +1,7 @@
 defmodule MerkleDb.Web.Router do
   use Plug.Router
   alias MerkleDb.{Bootstrap, Filter, KV, PayloadStore, Persistence, Query, Replication, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
+  alias MerkleDb.Web.Auth
 
   plug Plug.Static,
     at: "/",
@@ -8,9 +9,18 @@ defmodule MerkleDb.Web.Router do
     only: ["index.html"]
 
   plug :match
+  plug :authenticate_v1
   plug :dispatch
 
-  # --- API V1 ---
+  defp authenticate_v1(conn, _opts) do
+    if String.starts_with?(conn.request_path, "/v1") do
+      MerkleDb.Web.Auth.call(conn, [])
+    else
+      conn
+    end
+  end
+
+  # --- API V1 (Secured) ---
 
   get "/v1/collections" do
     collections = KV.list_collections()
