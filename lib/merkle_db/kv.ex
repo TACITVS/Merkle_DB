@@ -218,6 +218,9 @@ defmodule MerkleDb.KV do
     with {:ok, tree} <- get_tree(collections, collection) do
       new_tree = Tree.insert(tree, key, vector, metadata)
       new_tree = %{new_tree | last_wal_version: version}
+      
+      check_auto_index(collection, new_tree)
+      
       {:reply, :ok, Map.put(collections, collection, new_tree)}
     else
       err -> {:reply, err, collections}
@@ -240,9 +243,19 @@ defmodule MerkleDb.KV do
       new_tree = Tree.insert_batch(tree, pairs)
       new_tree = %{new_tree | last_wal_version: version}
       Logger.info("put_batch finished for #{collection}, count=#{length(pairs)}")
+      
+      check_auto_index(collection, new_tree)
+      
       {:reply, :ok, Map.put(collections, collection, new_tree)}
     else
       err -> {:reply, err, collections}
+    end
+  end
+
+  defp check_auto_index(collection, tree) do
+    # Trigger indexing if > 1000 items and no index (HNSW or IVF)
+    if tree.count > 1000 and tree.hnsw == nil and tree.centroids == nil do
+      MerkleDb.IndexBuilder.trigger_auto_build(collection, tree.count)
     end
   end
 

@@ -15,6 +15,10 @@ defmodule MerkleDb.IndexBuilder do
     GenServer.call(__MODULE__, {:start, k, opts})
   end
 
+  def trigger_auto_build(collection, count) do
+    GenServer.cast(__MODULE__, {:auto_build, collection, count})
+  end
+
   def status do
     Progress.get_status()
   end
@@ -31,12 +35,30 @@ defmodule MerkleDb.IndexBuilder do
   end
 
   @impl true
+  def handle_cast({:auto_build, collection, count}, state) do
+    if state.status == :idle do
+      # Calculate k = sqrt(N)
+      k = max(10, trunc(:math.sqrt(count)))
+      
+      Task.start(fn -> 
+        start_build(k, min_vectors: 1000, collection: collection) 
+      end)
+      
+      {:noreply, state}
+    else
+      # Already running, ignore
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_call({:start, k, opts}, _from, state) do
     if state.status in [:preparing, :queued, :running, :finalizing, :cancelling] do
       {:reply, {:error, :already_running}, state}
     else
       LoadGenerator.stop_if_active()
-      tree = KV.snapshot()
+      collection = Keyword.get(opts, :collection, "default")
+      tree = KV.snapshot(collection)
       force = Keyword.get(opts, :force, false)
       min_vectors = Keyword.get(opts, :min_vectors, @min_vectors)
       max_iter = Keyword.get(opts, :max_iter, 100)
@@ -91,6 +113,7 @@ defmodule MerkleDb.IndexBuilder do
           new_state = %{
             status: :preparing,
             job: nil,
+            collection: collection,
             tree: tree,
             tree_generation: tree.generation,
             k: k,
@@ -206,10 +229,10 @@ defmodule MerkleDb.IndexBuilder do
   def handle_info({:finalize_complete, {:ok, {new_tree, metadata}}}, state) do
     elapsed_ms = elapsed_since(state.started_at_ms)
 
-    case KV.update_index(new_tree, state.tree_generation) do
+    case KV.update_index(state.collection, new_tree, state.tree_generation) do
       :ok ->
         if Map.get(state, :auto_snapshot, true) do
-          _ = Persistence.save_async(new_tree, label: "ivf_index")
+          _ = Persistence.save_async(new_tree, label: "ivf_index", collection: state.collection)
         end
 
         Progress.report(%{
