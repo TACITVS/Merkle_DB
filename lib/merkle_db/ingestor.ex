@@ -19,6 +19,58 @@ defmodule MerkleDb.Ingestor do
     do_chunk(words, size, overlap)
   end
 
+  @doc """
+  Chunks a book into chapters, then chunks each chapter into sliding windows.
+  Useful for hierarchical topic summarization.
+  """
+  def chunk_book(text, opts \\ []) when is_binary(text) do
+    # Default pattern for chapters
+    chapter_pattern = Keyword.get(opts, :chapter_pattern, ~r/CHAPTER [IVXLCDM0-9]+/i)
+    chunk_size = Keyword.get(opts, :chunk_size, 200)
+    chunk_overlap = Keyword.get(opts, :chunk_overlap, 50)
+
+    # 1. Split into chapters
+    chapters = split_chapters(text, chapter_pattern)
+
+    # 2. Chunk each chapter
+    Enum.map(chapters, fn {title, content} ->
+      chunks = chunk_text(content, chunk_size, chunk_overlap)
+      %{title: title, chunks: chunks}
+    end)
+  end
+
+  defp split_chapters(text, pattern) do
+    # Find all chapter markers
+    # include_captures adds the titles to the list
+    parts = 
+      Regex.split(pattern, text, include_captures: true, trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    # If the first part matches the pattern, it's a chapter title.
+    # If not, it's a prologue.
+    {prologue, remaining} = 
+      case parts do
+        [first | _] ->
+          if Regex.match?(pattern, first) do
+            {[], parts}
+          else
+            {[{"Prologue", Enum.at(parts, 0)}], Enum.drop(parts, 1)}
+          end
+        [] -> {[], []}
+      end
+
+    chapters = 
+      remaining
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn 
+        [title, content] -> {title, content}
+        [title] -> {title, ""}
+      end)
+
+    prologue ++ chapters
+  end
+
   defp do_chunk(words, size, overlap) do
     # Ensure we make progress even if overlap is poorly configured
     step = max(size - overlap, 1)
