@@ -56,7 +56,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_query_gemv_columnar", 4, "manual_nif_fp_query_gemv_columnar", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_gemv_columnar_batch", 5, "manual_nif_fp_query_gemv_columnar_batch", 0},
     {"fp_query_gemv_f32_batch", 4, "manual_nif_fp_query_gemv_f32_batch", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
-    {"fp_vector_sum_f32", 3, "manual_nif_fp_vector_sum_f32", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"fp_vector_sum_f32", 3, "manual_nif_fp_vector_sum_f32", 0},
     {"fp_query_gemv_indexed", 5, "nif_fp_query_gemv_indexed", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_topk", 4, "nif_fp_query_topk", 0},
     {"fp_quantize_f64_to_u8", 3, "nif_fp_quantize_f64_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},

@@ -195,6 +195,9 @@ static ERL_NIF_TERM manual_nif_fp_vector_sum_f32(ErlNifEnv* env, int argc, const
     if (!enif_get_uint64(env, argv[1], &count)) return enif_make_badarg(env);
     if (!enif_get_uint64(env, argv[2], &dim)) return enif_make_badarg(env);
 
+    // fprintf(stderr, "NIF fp_vector_sum_f32: count=%llu, dim=%llu, bin_size=%zu\\n", 
+    //        (unsigned long long)count, (unsigned long long)dim, vectors_bin.size);
+
     if (vectors_bin.size != count * dim * 4) return enif_make_badarg(env);
 
     ErlNifBinary output_bin;

@@ -18,11 +18,15 @@ defmodule MerkleDb.TextEmbedding do
 
   @doc "Ensures GloVe vectors are loaded into ETS."
   def init do
-    if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :public, {:read_concurrency, true}])
-      load_glove()
-    else
-      :ok
+    case :ets.whereis(@table) do
+      :undefined ->
+        try do
+          :ets.new(@table, [:named_table, :public, {:read_concurrency, true}])
+          load_glove()
+        rescue
+          ArgumentError -> :ok # Already created by another process
+        end
+      _ -> :ok
     end
   end
 
@@ -49,6 +53,12 @@ defmodule MerkleDb.TextEmbedding do
       0 -> zero_vector()
       count -> aggregate_vectors(vectors, count)
     end
+  end
+
+  @doc "Aggregates a list of vectors into a single summary vector (f32)."
+  def summarize_vectors([]), do: zero_vector()
+  def summarize_vectors(vectors) when is_list(vectors) do
+    aggregate_vectors(vectors, length(vectors))
   end
 
   @doc "Converts an f32 binary vector to f64 binary vector."
@@ -86,9 +96,26 @@ defmodule MerkleDb.TextEmbedding do
     sum_vec = ASM.fp_vector_sum_f32(batch_bin, count, @dim)
 
     # Average by scaling by 1/count
-    # Note: scaling by 1.0/count
-    # NIF signature: fp_map_scale_f32(input_bin, output_size, n, scale)
-    ASM.fp_map_scale_f32(sum_vec, @dim * 4, @dim, 1.0 / count)
+    # Note: Even if we don't scale, we MUST normalize for cosine similarity
+    res = 
+      if count > 1 do
+        ASM.fp_map_scale_f32(sum_vec, @dim * 4, @dim, 1.0 / count)
+      else
+        sum_vec
+      end
+    
+    l2_normalize(res)
+  end
+
+  defp l2_normalize(vec_bin) do
+    floats = for <<f::float-little-32 <- vec_bin>>, do: f
+    mag = :math.sqrt(Enum.reduce(floats, 0.0, fn x, acc -> acc + x * x end))
+    
+    if mag > 0 do
+      for f <- floats, into: <<>>, do: <<f/mag::float-little-32>>
+    else
+      vec_bin
+    end
   end
 
   defp zero_vector do
