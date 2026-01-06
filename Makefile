@@ -64,6 +64,7 @@ C_LIB_OBJS = \
     native/fp_correlation_wrappers.obj \
     native/fp_general_hof.obj \
     native/fp_generic.obj \
+    native/fp_bitmap.obj \
     native/fp_mmap.obj \
     native/fp_monads.obj \
     native/fp_moving_averages_wrappers.obj \
