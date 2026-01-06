@@ -593,6 +593,10 @@ def fp_query_gemv_quantized(_columns_tuple, _query_bin, _bias, _count, _dim), do
 def fp_query_gemv_quantized_f32(_columns_tuple, _query_bin, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_sparse_dotp"
 def fp_sparse_dotp(_indices_a, _values_a, _indices_b, _values_b), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_mmap_open"
+def fp_mmap_open(_path), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_query_gemv_mmap_f32"
+def fp_query_gemv_mmap_f32(_mmap_resources_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_create"
 def fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_insert"
