@@ -47,6 +47,8 @@ static ERL_NIF_TERM nif_fp_sparse_dotp(ErlNifEnv* env, int argc, const ERL_NIF_T
 static ERL_NIF_TERM manual_nif_fp_mmap_open(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM manual_nif_fp_query_gemv_mmap_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM manual_nif_fp_query_gemv_bitmasked_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM manual_nif_fp_bitmap_set(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM manual_nif_fp_bitmap_and(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_create(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_insert(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
@@ -2058,6 +2060,8 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"fp_mmap_open", 1, manual_nif_fp_mmap_open, 0},
     {"fp_query_gemv_mmap_f32", 4, manual_nif_fp_query_gemv_mmap_f32, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_query_gemv_bitmasked_f32", 5, manual_nif_fp_query_gemv_bitmasked_f32, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"fp_bitmap_set", 2, manual_nif_fp_bitmap_set, 0},
+    {"fp_bitmap_and", 2, manual_nif_fp_bitmap_and, 0},
     {"fp_hnsw_create", 4, nif_fp_hnsw_create, 0},
     {"fp_hnsw_insert", 5, nif_fp_hnsw_insert, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_hnsw_search", 6, nif_fp_hnsw_search, ERL_NIF_DIRTY_JOB_CPU_BOUND},
