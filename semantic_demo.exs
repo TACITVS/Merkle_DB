@@ -31,7 +31,16 @@ defmodule MerkleDb.SemanticDemo do
     
     # ROI Rank 2: Check memory usage
     stats = Tree.stats(KV.snapshot(@collection))
-    IO.puts "Memory Usage: #{stats.memory_mb} MB (Precision: #{stats.precision})"
+    IO.puts "Memory Usage (Full Precision): #{stats.memory_mb} MB (Precision: #{stats.precision})"
+
+    # ROI Rank 3: Quantize the collection
+    IO.puts "Quantizing collection to int8..."
+    tree = KV.snapshot(@collection)
+    quantized_tree = Tree.quantize(tree)
+    KV.set_tree(@collection, quantized_tree)
+    
+    stats_q = Tree.stats(KV.snapshot(@collection))
+    IO.puts "Memory Usage (Quantized): #{stats_q.memory_mb} MB"
     
     # 4. Search Demo using the new :semantic query type
     IO.puts "\n=== Semantic Search Results (AVX2 Accelerated) ==="

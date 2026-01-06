@@ -213,6 +213,58 @@ static ERL_NIF_TERM manual_nif_fp_vector_sum_f32(ErlNifEnv* env, int argc, const
     return enif_make_binary(env, &output_bin);
 }
 
+static ERL_NIF_TERM manual_nif_fp_query_gemv_quantized_f32(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int dim_int;
+    ErlNifUInt64 count, dim;
+    double bias_dbl;
+
+    if (!enif_get_double(env, argv[2], &bias_dbl)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[3], &count)) return enif_make_badarg(env);
+    if (!enif_get_uint64(env, argv[4], &dim)) return enif_make_badarg(env);
+
+    if (!enif_get_tuple(env, argv[0], &dim_int, NULL)) return enif_make_badarg(env);
+    if ((size_t)dim_int != dim) return enif_make_badarg(env);
+
+    ErlNifBinary query_bin;
+    if (!enif_inspect_binary(env, argv[1], &query_bin)) return enif_make_badarg(env);
+    if (query_bin.size != dim * 4) return enif_make_badarg(env);
+
+    const uint8_t** columns = malloc(dim * sizeof(uint8_t*));
+    if (!columns) return enif_make_badarg(env);
+
+    const ERL_NIF_TERM* tuple_elements;
+    enif_get_tuple(env, argv[0], &dim_int, &tuple_elements);
+
+    ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
+    if (!col_bins) { free(columns); return enif_make_badarg(env); }
+
+    for (size_t d = 0; d < dim; d++) {
+        if (!enif_inspect_binary(env, tuple_elements[d], &col_bins[d]) || col_bins[d].size != count) {
+            free(columns); free(col_bins); return enif_make_badarg(env);
+        }
+        columns[d] = (const uint8_t*)col_bins[d].data;
+    }
+
+    ErlNifBinary scores_bin;
+    if (!enif_alloc_binary(count * 4, &scores_bin)) {
+        free(columns); free(col_bins); return enif_make_badarg(env);
+    }
+
+    fp_query_gemv_quantized_f32_u8(
+        columns,
+        (const float*)query_bin.data,
+        (float)bias_dbl,
+        (float*)scores_bin.data,
+        count,
+        dim
+    );
+
+    free(columns);
+    free(col_bins);
+
+    return enif_make_binary(env, &scores_bin);
+}
+
 static ERL_NIF_TERM nif_fp_query_gemv_indexed(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     int dim_int;
     ErlNifUInt64 count, dim;
@@ -660,6 +712,23 @@ static ERL_NIF_TERM nif_fp_blake3_hash(ErlNifEnv* env, int argc, const ERL_NIF_T
     fp_blake3_hash(input_bin.data, input_bin.size, output_bin.data);
 
     return enif_make_binary(env, &output_bin);
+}
+
+static ERL_NIF_TERM nif_fp_quantize_f32_to_u8(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary in_bin;
+    double min_val, inv_scale;
+
+    if (!enif_inspect_binary(env, argv[0], &in_bin)) return enif_make_badarg(env);
+    if (!enif_get_double(env, argv[1], &min_val)) return enif_make_badarg(env);
+    if (!enif_get_double(env, argv[2], &inv_scale)) return enif_make_badarg(env);
+
+    size_t count = in_bin.size / 4;
+    ErlNifBinary out_bin;
+    if (!enif_alloc_binary(count, &out_bin)) return enif_make_badarg(env);
+
+    fp_quantize_f32_to_u8((const float*)in_bin.data, (uint8_t*)out_bin.data, count, (float)min_val, (float)inv_scale);
+
+    return enif_make_binary(env, &out_bin);
 }
 
 // --- LIFECYCLE ---

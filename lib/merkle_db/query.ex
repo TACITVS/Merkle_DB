@@ -311,13 +311,17 @@ defmodule MerkleDb.Query do
     tombstones = tree.tombstones || MapSet.new()
     %{columns: q_cols, params: q_params} = tree.quantized
 
-    # 1. Normalize and parse query
-    q_floats = for <<x::little-float-size(64) <- query_vec>>, do: x
+    # 1. Normalize and parse query (handles both f32 and f64 input)
+    q_floats = 
+      case tree.precision do
+        :f32 -> for <<x::little-float-size(32) <- query_vec>>, do: x
+        :f64 -> for <<x::little-float-size(64) <- query_vec>>, do: x
+      end
+    
     q_mag = :math.sqrt(Enum.reduce(q_floats, 0.0, fn x, acc -> acc + x*x end))
     q_norm_list = if q_mag == 0, do: q_floats, else: Enum.map(q_floats, &(&1 / q_mag))
 
     # 2. Pre-process query for quantized dot product
-    # Dot product logic:
     # float_val = (uint8_val * scale) + min
     # sum(float_val_d * q_d) = sum(((uint8_val_d * scale_d) + min_d) * q_d)
     #                        = sum(uint8_val_d * (scale_d * q_d) + (min_d * q_d))
@@ -332,26 +336,34 @@ defmodule MerkleDb.Query do
         {[q_d * scale_d | s_acc], b_acc + (min_d * q_d)}
       end)
     
-    scaled_q_bin = for s <- Enum.reverse(scaled_q_list), into: <<>>, do: <<s::little-float-64>>
+    # 3. Call appropriate NIF based on precision
+    scores_bin = 
+      if tree.precision == :f32 do
+        scaled_q_bin = for s <- Enum.reverse(scaled_q_list), into: <<>>, do: <<s::little-float-32>>
+        ASM.fp_query_gemv_quantized_f32(q_cols, scaled_q_bin, bias, count, dim)
+      else
+        scaled_q_bin = for s <- Enum.reverse(scaled_q_list), into: <<>>, do: <<s::little-float-64>>
+        ASM.fp_query_gemv_quantized(q_cols, scaled_q_bin, bias, count, dim)
+      end
 
-    # 3. Call NIF
-    scores_bin = ASM.fp_query_gemv_quantized(q_cols, scaled_q_bin, bias, count, dim)
+    # 4. Top-K selection (f32/f64 result conversion)
+    scores_list = 
+      if tree.precision == :f32 do
+        for <<s::little-float-32 <- scores_bin>>, do: (double = s; double)
+      else
+        for <<s::little-float-64 <- scores_bin>>, do: s
+      end
 
-    # 4. Top-K selection (same as flat)
-    {result_count, indices_bin, result_scores_bin} =
-      ASM.fp_query_topk(scores_bin, count, k, threshold)
-
-    if result_count == 0 do
-      []
-    else
-      indices = for <<i::little-signed-32 <- indices_bin>>, do: i
-      scores = for <<s::little-float-size(64) <- result_scores_bin>>, do: s
-
-      Enum.zip(indices, scores)
-      |> Enum.reject(fn {idx, _score} -> MapSet.member?(tombstones, idx) end)
+    results = 
+      scores_list
+      |> Enum.with_index()
+      |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+      |> Enum.filter(fn {score, _idx} -> score >= threshold end)
+      |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
       |> Enum.take(k)
-      |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
-    end
+      |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+    
+    results
   end
 
   defp do_range(tree, query_vec, min_sim, max_sim, opts) do

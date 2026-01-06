@@ -585,8 +585,12 @@ def fp_query_gemv_f32_batch(_db_vectors_bin, _query_bin, _count, _dim), do: :erl
 def fp_vector_sum_f32(_vectors_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_quantize_f64_to_u8"
 def fp_quantize_f64_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_quantize_f32_to_u8"
+def fp_quantize_f32_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_quantized"
 def fp_query_gemv_quantized(_columns_tuple, _query_bin, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+@doc "Calls C function: fp_query_gemv_quantized_f32"
+def fp_query_gemv_quantized_f32(_columns_tuple, _query_bin, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_sparse_dotp"
 def fp_sparse_dotp(_indices_a, _values_a, _indices_b, _values_b), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_create"
