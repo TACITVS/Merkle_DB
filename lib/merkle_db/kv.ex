@@ -76,6 +76,11 @@ defmodule MerkleDb.KV do
     GenServer.call(__MODULE__, {:reset, collection})
   end
 
+  @doc "Create a fast binary checkpoint for instant startup"
+  def checkpoint(collection \\ "default") do
+    GenServer.call(__MODULE__, {:checkpoint, collection})
+  end
+
   # ==================== Callbacks ====================
 
   # ==================== Callbacks ====================
@@ -85,8 +90,19 @@ defmodule MerkleDb.KV do
     collections = 
       Persistence.list_collections()
       |> Enum.reduce(%{}, fn name, acc ->
-        case Persistence.load(collection: name) do
-          {:ok, %{tree: tree}} -> Map.put(acc, name, tree)
+        # Try checkpoint first (V2 persistence), then snapshot (V1)
+        tree_res = 
+          case Persistence.load_checkpoint(name) do
+            {:ok, tree} -> {:ok, tree}
+            _ -> 
+              case Persistence.load(collection: name) do
+                {:ok, %{tree: tree}} -> {:ok, tree}
+                _ -> :error
+              end
+          end
+
+        case tree_res do
+          {:ok, tree} -> Map.put(acc, name, tree)
           _ -> acc
         end
       end)
@@ -300,6 +316,24 @@ defmodule MerkleDb.KV do
       {:reply, :ok, new_collections}
     else
       {:reply, {:error, :collection_not_found}, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:checkpoint, collection}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      # 1. Flush WAL (ensure everything on disk is in the tree) - implicitly handled by memory state
+      # 2. Save Checkpoint
+      case Persistence.save_checkpoint(tree, collection) do
+        {:ok, dir} -> 
+          # 3. Truncate WAL logic would go here (update last_persisted_version)
+          Logger.info("Checkpoint saved to #{dir}")
+          {:reply, :ok, collections}
+        err -> 
+          {:reply, err, collections}
+      end
+    else
+      err -> {:reply, err, collections}
     end
   end
 

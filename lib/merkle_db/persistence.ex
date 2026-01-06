@@ -61,6 +61,59 @@ defmodule MerkleDb.Persistence do
     end
   end
 
+  def checkpoint_dir(collection) do
+    Path.join(snapshot_dir(), "checkpoint-#{collection}")
+  end
+
+  def save_checkpoint(%MerkleDb.Tree{} = tree, collection) do
+    dir = checkpoint_dir(collection)
+    File.mkdir_p!(dir)
+    
+    IO.puts "DEBUG: saving checkpoint for #{collection}, count=#{tree.count}"
+
+    # 1. Save Columns as raw binaries
+    Enum.each(0..(tree.dim - 1), fn i ->
+      col_path = Path.join(dir, "col_#{i}.bin")
+      File.write!(col_path, elem(tree.columns, i), [:binary])
+    end)
+
+    # 2. Save Metadata (keys, tombstones, etc) as term binary (faster than JSON for maps)
+    # We strip the heavy columns to keep this lightweight
+    meta_tree = %{tree | columns: nil, hnsw: nil} 
+    meta_path = Path.join(dir, "metadata.term")
+    File.write!(meta_path, :erlang.term_to_binary(meta_tree))
+
+    {:ok, dir}
+  end
+
+  def load_checkpoint(collection) do
+    dir = checkpoint_dir(collection)
+    meta_path = Path.join(dir, "metadata.term")
+
+    if File.exists?(meta_path) do
+      # 1. Load Metadata
+      meta_binary = File.read!(meta_path)
+      tree = :erlang.binary_to_term(meta_binary)
+
+      # 2. Load Columns
+      columns = 
+        for i <- 0..(tree.dim - 1) do
+          col_path = Path.join(dir, "col_#{i}.bin")
+          File.read!(col_path)
+        end
+        |> List.to_tuple()
+
+      # 3. Reconstruct Tree
+      full_tree = %{tree | columns: columns}
+      
+      # 4. Rebuild auxiliary structures (HNSW index needs to be rebuilt or saved separately)
+      # For now, we assume index is rebuilt on demand or we implement index serialization later.
+      {:ok, MerkleDb.Tree.rebuild_aux_data(full_tree)}
+    else
+      {:error, :not_found}
+    end
+  end
+
   def save(tree, opts \\ []) do
     compress = Keyword.get(opts, :compress, true)
     label = Keyword.get(opts, :label, "snapshot")
