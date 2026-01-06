@@ -101,7 +101,9 @@ defmodule MerkleDb.KV do
         {:ok, entries} ->
           if length(entries) > 0 do
             Logger.info("Replaying #{length(entries)} WAL entries...")
-            Enum.reduce(entries, collections, fn entry, acc -> apply_wal_entry(acc, entry) end)
+            res = Enum.reduce(entries, collections, fn entry, acc -> apply_wal_entry(acc, entry) end)
+            Logger.info("Replay finished.")
+            res
           else
             collections
           end
@@ -109,6 +111,7 @@ defmodule MerkleDb.KV do
           collections
       end
     
+    Logger.info("KV init finished.")
     {:ok, collections}
   end
 
@@ -194,7 +197,7 @@ defmodule MerkleDb.KV do
   def handle_call({:put, collection, key, vector, metadata}, _from, collections) do
     # 1. Log to WAL first for durability
     version = System.system_time(:microsecond)
-    :ok = WAL.append_upsert({collection, key, vector, metadata, version})
+    :ok = WAL.append_upsert(WAL, {collection, key, vector, metadata, version})
 
     with {:ok, tree} <- get_tree(collections, collection) do
       new_tree = Tree.insert(tree, key, vector, metadata)
@@ -207,16 +210,20 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call({:put_batch, collection, pairs}, _from, collections) do
-    # Log each pair to WAL
+    # Log each pair to WAL without immediate sync
     version = System.system_time(:microsecond)
     Enum.each(pairs, fn
-      {key, vec} -> WAL.append_upsert({collection, key, vec, %{}, version})
-      {key, vec, meta} -> WAL.append_upsert({collection, key, vec, meta, version})
+      {key, vec} -> WAL.append_upsert(WAL, {collection, key, vec, %{}, version}, sync: false)
+      {key, vec, meta} -> WAL.append_upsert(WAL, {collection, key, vec, meta, version}, sync: false)
     end)
+    
+    # Sync WAL once for the whole batch
+    WAL.sync()
 
     with {:ok, tree} <- get_tree(collections, collection) do
       new_tree = Tree.insert_batch(tree, pairs)
       new_tree = %{new_tree | last_wal_version: version}
+      Logger.info("put_batch finished for #{collection}, count=#{length(pairs)}")
       {:reply, :ok, Map.put(collections, collection, new_tree)}
     else
       err -> {:reply, err, collections}
@@ -227,7 +234,7 @@ defmodule MerkleDb.KV do
   def handle_call({:delete, collection, key}, _from, collections) do
     # Log to WAL
     version = System.system_time(:microsecond)
-    :ok = WAL.append_delete({collection, key, version})
+    :ok = WAL.append_delete(WAL, {collection, key, version})
 
     with {:ok, tree} <- get_tree(collections, collection) do
       case Tree.delete(tree, key) do

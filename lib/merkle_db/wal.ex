@@ -33,14 +33,22 @@ defmodule MerkleDb.WAL do
     GenServer.start_link(__MODULE__, {path, opts})
   end
 
-  def append_upsert(data), do: append_upsert(__MODULE__, data)
-  def append_upsert(wal, data), do: GenServer.call(wal, {:append, :upsert, data})
+  def append_upsert(wal, data, opts \\ []) do
+    sync = Keyword.get(opts, :sync, true)
+    GenServer.call(wal, {:append, :upsert, data, sync})
+  end
 
   def append_delete(data), do: append_delete(__MODULE__, data)
-  def append_delete(wal, data), do: GenServer.call(wal, {:append, :delete, data})
+  def append_delete(wal, data, opts \\ []) do
+    sync = Keyword.get(opts, :sync, true)
+    GenServer.call(wal, {:append, :delete, data, sync})
+  end
 
   def append_commit(data), do: append_commit(__MODULE__, data)
-  def append_commit(wal, data), do: GenServer.call(wal, {:append, :commit, data})
+  def append_commit(wal, data, opts \\ []) do
+    sync = Keyword.get(opts, :sync, true)
+    GenServer.call(wal, {:append, :commit, data, sync})
+  end
 
   def sync(wal \\ __MODULE__) do
     GenServer.call(wal, :sync)
@@ -85,10 +93,10 @@ defmodule MerkleDb.WAL do
   end
 
   @impl true
-  def handle_call({:append, type, data}, _from, state) do
+  def handle_call({:append, type, data, sync}, _from, state) do
     case write_entry(state.fd, type, data) do
       {:ok, bytes} ->
-        if state.sync_mode == :sync, do: :file.sync(state.fd)
+        if sync and state.sync_mode == :sync, do: :file.sync(state.fd)
         {:reply, :ok, %{state | bytes_written: state.bytes_written + bytes, entry_count: state.entry_count + 1}}
       error -> {:reply, error, state}
     end

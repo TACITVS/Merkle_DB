@@ -85,15 +85,9 @@ defmodule MerkleDb.Query do
     
     queries_bin = IO.iodata_to_binary(norm_queries)
 
-    IO.puts "DEBUG: Calling ASM.fp_query_gemv_columnar_batch..."
-    IO.puts "DEBUG: batch_count=#{batch_count}, tree_count=#{tree.count}, dim=#{dim}"
-    IO.puts "DEBUG: queries_bin size=#{byte_size(queries_bin)}"
-    
     # 2. Call batch NIF
     scores_bin = ASM.fp_query_gemv_columnar_batch(tree.columns, queries_bin, batch_count, tree.count, dim)
     
-    IO.puts "DEBUG: scores_bin size=#{byte_size(scores_bin)}"
-
     # 3. Process results for each query in batch
     for b <- 0..(batch_count - 1) do
       # Extract score slice for this query

@@ -3,11 +3,12 @@ alias MerkleDb.{KV, Query, Tree}
 defmodule BatchQueryBenchmark do
   @collection "bench_batch"
   @dim 64
-  @total_vectors 10000
+  @total_vectors 1000
   @batch_size 20
   @k 10
 
   def run do
+    File.write!("bench.log", "Starting benchmark\n", [:append])
     try do
       IO.puts "=== MerkleDB Batch Query API Benchmark ==="
       setup()
@@ -18,12 +19,28 @@ defmodule BatchQueryBenchmark do
 
       # 1. Single Query Benchmark
       IO.puts "\n1. Running #{@batch_size} queries INDIVIDUALLY..."
+      File.write!("bench.log", "Starting individual queries\n", [:append])
       {time_single, _} = :timer.tc(fn ->
-        tree = KV.snapshot(@collection)
-        Enum.each(Enum.with_index(query_vectors), fn {q, _i} ->
-          _ = Query.execute(tree, [:knn, q, @k, 0.0])
-          IO.write "."
-        end)
+        tree = try do
+          File.write!("bench.log", "Calling snapshot\n", [:append])
+          res = GenServer.call(KV, {:snapshot, @collection}, 30_000)
+          File.write!("bench.log", "Snapshot returned\n", [:append])
+          res
+        catch
+          kind, reason -> 
+            IO.puts "ERROR during snapshot: #{inspect({kind, reason})}"
+            File.write!("bench.log", "ERROR during snapshot: #{inspect({kind, reason})}\n", [:append])
+            nil
+        end
+        
+        if tree do
+          Enum.each(Enum.with_index(query_vectors), fn {q, i} ->
+            File.write!("bench.log", "Query #{i+1} starting\n", [:append])
+            _ = Query.execute(tree, [:knn, q, @k, 0.0])
+            File.write!("bench.log", "Query #{i+1} finished\n", [:append])
+            IO.write "#{i+1} "
+          end)
+        end
         IO.puts ""
       end)
       qps_single = Float.round(@batch_size / (time_single / 1_000_000.0), 2)
@@ -33,7 +50,7 @@ defmodule BatchQueryBenchmark do
       # 2. Batch Query Benchmark
       IO.puts "\n2. Running #{@batch_size} queries in a SINGLE BATCH..."
       {time_batch, _} = :timer.tc(fn ->
-        tree = KV.snapshot(@collection)
+        tree = GenServer.call(KV, {:snapshot, @collection}, 30_000)
         _ = Query.execute_batch(tree, query_vectors, @k, 0.0)
       end)
       qps_batch = Float.round(@batch_size / (time_batch / 1_000_000.0), 2)
@@ -56,7 +73,7 @@ defmodule BatchQueryBenchmark do
     
     IO.write "Ingesting #{@total_vectors} vectors..."
     vectors = for i <- 1..@total_vectors, do: {"vec_#{i}", generate_random_vector_bin(@dim)}
-    KV.put_batch(@collection, vectors)
+    GenServer.call(KV, {:put_batch, @collection, vectors}, 60_000)
     IO.puts " Done."
   end
 
