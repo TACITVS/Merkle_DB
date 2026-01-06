@@ -135,7 +135,11 @@ defmodule MerkleDb.Tree do
     q_params = 
       for d <- 0..(tree.dim - 1) do
         col_bin = elem(tree.columns, d)
-        floats = for <<x::little-float-64 <- col_bin>>, do: x
+        floats = 
+          case tree.precision do
+            :f32 -> for <<x::little-float-32 <- col_bin>>, do: x
+            :f64 -> for <<x::little-float-64 <- col_bin>>, do: x
+          end
         min_v = Enum.min(floats)
         max_v = Enum.max(floats)
         range = max_v - min_v
@@ -147,7 +151,11 @@ defmodule MerkleDb.Tree do
       for d <- 0..(tree.dim - 1) do
         col_bin = elem(tree.columns, d)
         {min_v, inv_scale} = Enum.at(q_params, d)
-        MerkleDb.ASM.fp_quantize_f64_to_u8(col_bin, min_v, inv_scale)
+        if tree.precision == :f32 do
+          MerkleDb.ASM.fp_quantize_f32_to_u8(col_bin, min_v, inv_scale)
+        else
+          MerkleDb.ASM.fp_quantize_f64_to_u8(col_bin, min_v, inv_scale)
+        end
       end
 
     new_quantized = %{
