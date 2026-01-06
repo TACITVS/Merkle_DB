@@ -1,5 +1,5 @@
 defmodule MerkleDb.SemanticDemo do
-  alias MerkleDb.{KV, Query, TextEmbedding, Tree}
+  alias MerkleDb.{KV, Query, TextEmbedding, Tree, Ingestor}
 
   @collection "crime_and_punishment"
   @filename "crime_and_punishment.txt"
@@ -8,15 +8,16 @@ defmodule MerkleDb.SemanticDemo do
     # Set environment variable for test GloVe file
     System.put_env("GLOVE_FILE", "data/glove_test.txt")
     
-    IO.puts "=== MerkleDB Semantic Retrieval Demo ==="
+    IO.puts "=== MerkleDB Semantic Retrieval Demo (Sliding Window) ==="
     IO.puts "Book: Crime and Punishment (Dummy)"
     
     # 1. Setup - 300 dimensions for GloVe
     setup_collection()
     
-    # 2. Ingest
-    chunks = load_and_chunk()
-    IO.puts "Ingesting #{length(chunks)} text chunks..."
+    # 2. Ingest with Sliding Window
+    # Size 10 words, overlap 5 words
+    chunks = Ingestor.chunk_file(@filename, 10, 5)
+    IO.puts "Ingesting #{length(chunks)} overlapping text chunks..."
     
     ingest_chunks(chunks)
     IO.puts "Ingestion complete."
@@ -61,8 +62,10 @@ defmodule MerkleDb.SemanticDemo do
 
   defp ingest_chunks(chunks) do
     kv_pairs = 
-      Enum.map(chunks, fn {text, idx} ->
-        id = "line_" <> Integer.to_string(idx)
+      chunks
+      |> Enum.with_index()
+      |> Enum.map(fn {text, idx} ->
+        id = "chunk_" <> Integer.to_string(idx)
         # embed/1 returns f32 binary
         vec = TextEmbedding.embed(text)
         meta = %{"text" => text}
