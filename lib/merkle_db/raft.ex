@@ -16,10 +16,12 @@ defmodule MerkleDb.Raft do
 
     # 3. Start the Raft server on this node
     data_dir = Path.join(File.cwd!(), "data/raft")
-    File.mkdir_p!(data_dir)
+    # Add server-specific subdir to avoid path conflicts and segment writer enoent
+    server_dir = Path.join(data_dir, to_string(node()))
+    File.mkdir_p!(server_dir)
     
-    # Configure ra to use our data directory
-    Application.put_env(:ra, :data_dir, String.to_charlist(data_dir))
+    # Raft Tuning Parameters
+    Application.put_env(:ra, :data_dir, String.to_charlist(server_dir))
 
     # Raft Tuning Parameters
     # Election timeout: 500-1000ms (default is usually higher)

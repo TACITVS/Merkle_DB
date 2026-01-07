@@ -9,7 +9,10 @@ defmodule MerkleDb.Raft.Machine do
 
   @impl :ra_machine
   def init(_conf) do
-    # Initial state is an empty map of collections
+    # Ensure the directory for this specific server exists if it needs to store segments
+    # Ra usually handles this, but the segment_writer was reporting enoent during heavy load.
+    # However, Machine init doesn't have easy access to the server ID or data_dir.
+    # We'll rely on the default %{} state.
     %{}
   end
 
