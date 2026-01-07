@@ -403,25 +403,21 @@ defmodule MerkleDb.Tree do
         IO.iodata_to_binary([col_bin | new_values])
       end
 
-    {new_keys, new_key_index, final_tombstones, final_metadata} = 
+    {new_keys, new_key_index, final_tombstones, final_metadata, final_inverted} = 
       normalized_triplets
       |> Enum.with_index(tree.count)
-      |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones, tree.metadata}, 
-         fn {{key, _vec, meta}, idx}, {keys_acc, key_index_acc, tombs_acc, meta_acc} ->
+      |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones, tree.metadata, tree.inverted_index}, 
+         fn {{key, _vec, meta}, idx}, {keys_acc, key_index_acc, tombs_acc, meta_acc, inverted_acc} ->
         
-        tombs_acc = 
-          case Map.get(key_index_acc, key) do
-            nil -> tombs_acc
-            prev_idx -> MapSet.put(tombs_acc, prev_idx)
-          end
-          
         meta_acc = if meta == %{}, do: meta_acc, else: Map.put(meta_acc, idx, meta)
+        inverted_acc = if meta == %{}, do: inverted_acc, else: update_inverted_index(inverted_acc, idx, meta)
 
         {
           Map.put(keys_acc, idx, key),
           Map.put(key_index_acc, key, idx),
           tombs_acc,
-          meta_acc
+          meta_acc,
+          inverted_acc
         }
       end)
 
@@ -431,6 +427,7 @@ defmodule MerkleDb.Tree do
       key_index: new_key_index,
       tombstones: final_tombstones,
       metadata: final_metadata,
+      inverted_index: final_inverted,
       count: new_count,
       generation: tree.generation + 1
     }

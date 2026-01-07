@@ -75,24 +75,27 @@ defmodule MerkleDb.Persistence do
   end
 
   def save_checkpoint(%MerkleDb.Tree{} = tree, collection) do
-    dir = checkpoint_dir(collection)
-    File.mkdir_p!(dir)
-    
-    IO.puts "DEBUG: saving checkpoint for #{collection}, count=#{tree.count}"
+    # Ensure atomic access across nodes if they share disk (unlikely but safe)
+    :global.trans({__MODULE__, :checkpoint, collection}, fn ->
+      dir = checkpoint_dir(collection)
+      File.mkdir_p!(dir)
+      
+      IO.puts "DEBUG: saving checkpoint for #{collection}, count=#{tree.count}"
 
-    # 1. Save Columns as raw binaries
-    Enum.each(0..(tree.dim - 1), fn i ->
-      col_path = Path.join(dir, "col_#{i}.bin")
-      File.write!(col_path, elem(tree.columns, i), [:binary])
+      # 1. Save Columns as raw binaries
+      Enum.each(0..(tree.dim - 1), fn i ->
+        col_path = Path.join(dir, "col_#{i}.bin")
+        File.write!(col_path, elem(tree.columns, i), [:binary])
+      end)
+
+      # 2. Save Metadata (keys, tombstones, etc) as term binary (faster than JSON for maps)
+      # We strip the heavy columns to keep this lightweight
+      meta_tree = %{tree | columns: nil, hnsw: nil} 
+      meta_path = Path.join(dir, "metadata.term")
+      File.write!(meta_path, :erlang.term_to_binary(meta_tree))
+
+      {:ok, dir}
     end)
-
-    # 2. Save Metadata (keys, tombstones, etc) as term binary (faster than JSON for maps)
-    # We strip the heavy columns to keep this lightweight
-    meta_tree = %{tree | columns: nil, hnsw: nil} 
-    meta_path = Path.join(dir, "metadata.term")
-    File.write!(meta_path, :erlang.term_to_binary(meta_tree))
-
-    {:ok, dir}
   end
 
   def load_checkpoint(collection, opts \\ []) do
@@ -112,10 +115,16 @@ defmodule MerkleDb.Persistence do
           if mode == :mmap do
              case MerkleDb.ASM.fp_mmap_open(col_path) do
                {:ok, res} -> res
-               _ -> raise "Failed to mmap column #{i}"
+               _ -> raise "Failed to mmap column #{i}. Ensure file exists and is readable."
              end
           else
-             File.read!(col_path)
+             if File.exists?(col_path) do
+                File.read!(col_path)
+             else
+                # Graceful recovery for missing columns (shouldn't happen)
+                Logger.error("Missing column file: #{col_path}")
+                <<>>
+             end
           end
         end
         |> List.to_tuple()
@@ -123,8 +132,7 @@ defmodule MerkleDb.Persistence do
       # 3. Reconstruct Tree
       full_tree = %{tree | columns: columns}
       
-      # 4. Rebuild auxiliary structures (HNSW index needs to be rebuilt or saved separately)
-      # For now, we assume index is rebuilt on demand or we implement index serialization later.
+      # 4. Rebuild auxiliary structures
       {:ok, MerkleDb.Tree.rebuild_aux_data(full_tree)}
     else
       {:error, :not_found}
@@ -265,7 +273,8 @@ defmodule MerkleDb.Persistence do
   defp validate_tree(_), do: {:error, :invalid_tree}
 
   defp validate_columns(tree) do
-    expected_bytes = tree.count * 8
+    elem_size = if tree.precision == :f32, do: 4, else: 8
+    expected_bytes = tree.count * elem_size
 
     case Enum.all?(Tuple.to_list(tree.columns), fn col ->
            is_binary(col) and byte_size(col) == expected_bytes

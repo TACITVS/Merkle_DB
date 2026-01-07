@@ -22,13 +22,6 @@ defmodule MerkleDb.Raft do
     
     # Raft Tuning Parameters
     Application.put_env(:ra, :data_dir, String.to_charlist(server_dir))
-
-    # Raft Tuning Parameters
-    # Election timeout: 500-1000ms (default is usually higher)
-    # Heartbeat: 100ms
-    # Snapshot threshold: 1000 entries
-    # Raft Tuning Parameters
-    Application.put_env(:ra, :data_dir, String.to_charlist(data_dir))
     
     # Tuning for faster elections in local dev/tests
     Application.put_env(:ra, :election_timeout_min, 500)

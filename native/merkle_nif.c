@@ -91,19 +91,21 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, 
 
     ErlNifBinary query_bin;
     if (!enif_inspect_binary(env, argv[1], &query_bin)) return enif_make_badarg(env);
-    ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
-    if (!col_bins) {
+    if (query_bin.size != dim * 8) return enif_make_badarg(env);
+
+    const double** columns = malloc(dim * sizeof(double*));
+    if (!columns) return enif_make_badarg(env);
+
+    const ERL_NIF_TERM* tuple_elements;
+    if (!enif_get_tuple(env, argv[0], &dim_int, &tuple_elements)) {
         free(columns);
         return enif_make_badarg(env);
     }
 
-    for (size_t d = 0; d < dim; d++) {
-        if (!enif_inspect_binary(env, tuple_elements[d], &col_bins[d]) || col_bins[d].size != count * 8) {
-            free(columns);
-            free(col_bins);
-            return enif_make_badarg(env);
-        }
-        columns[d] = (const double*)col_bins[d].data;
+    ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
+    if (!col_bins) {
+        free(columns);
+        return enif_make_badarg(env);
     }
 
     ErlNifBinary scores_bin;
@@ -141,6 +143,7 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar_batch(ErlNifEnv* env, int 
     ErlNifBinary queries_bin;
     if (!enif_inspect_binary(env, argv[1], &queries_bin)) return enif_make_badarg(env);
     if (queries_bin.size != batch_count * dim * 8) return enif_make_badarg(env);
+    if (dim > 100000) return enif_make_badarg(env);
 
     const double** columns = malloc(dim * sizeof(double*));
     if (!columns) return enif_make_badarg(env);
@@ -620,34 +623,71 @@ static ERL_NIF_TERM nif_fp_hnsw_search(ErlNifEnv* env, int argc, const ERL_NIF_T
     if (query_bin.size != (size_t)dim * 8) return enif_make_badarg(env);
 
     const double** columns = malloc(dim * sizeof(double*));
+    if (!columns) return enif_make_badarg(env);
+
     int dim_int;
     const ERL_NIF_TERM* tuple_elements;
-    enif_get_tuple(env, argv[4], &dim_int, &tuple_elements);
+    if (!enif_get_tuple(env, argv[4], &dim_int, &tuple_elements) || dim_int != dim) {
+        free(columns);
+        return enif_make_badarg(env);
+    }
     
     ErlNifBinary* col_bins = malloc(dim * sizeof(ErlNifBinary));
+    if (!col_bins) {
+        free(columns);
+        return enif_make_badarg(env);
+    }
+
     double** converted_columns = NULL;
 
     for (int d = 0; d < dim; d++) {
-        enif_inspect_binary(env, tuple_elements[d], &col_bins[d]);
+        if (!enif_inspect_binary(env, tuple_elements[d], &col_bins[d])) {
+            if (converted_columns) {
+                for (int j = 0; j < d; j++) if (converted_columns[j]) free(converted_columns[j]);
+                free(converted_columns);
+            }
+            free(columns); free(col_bins); return enif_make_badarg(env);
+        }
+
         if (col_bins[d].size == db_count * 4) {
             // f32 detected
             if (converted_columns == NULL) {
-                converted_columns = malloc(dim * sizeof(double*));
-                for(int j=0; j<dim; j++) converted_columns[j] = NULL;
+                converted_columns = calloc(dim, sizeof(double*));
+                if (!converted_columns) { free(columns); free(col_bins); return enif_make_badarg(env); }
             }
             converted_columns[d] = malloc(db_count * sizeof(double));
+            if (!converted_columns[d]) {
+                for (int j = 0; j < d; j++) if (converted_columns[j]) free(converted_columns[j]);
+                free(converted_columns); free(columns); free(col_bins); return enif_make_badarg(env);
+            }
             float* src = (float*)col_bins[d].data;
             for (size_t i = 0; i < db_count; i++) {
                 converted_columns[d][i] = (double)src[i];
             }
             columns[d] = converted_columns[d];
-        } else {
+        } else if (col_bins[d].size == db_count * 8) {
             columns[d] = (const double*)col_bins[d].data;
+        } else {
+            if (converted_columns) {
+                for (int j = 0; j < d; j++) if (converted_columns[j]) free(converted_columns[j]);
+                free(converted_columns);
+            }
+            free(columns); free(col_bins); return enif_make_badarg(env);
         }
     }
 
     int32_t* results_indices = malloc(k * sizeof(int32_t));
     double* results_scores = malloc(k * sizeof(double));
+
+    if (!results_indices || !results_scores) {
+        if (results_indices) free(results_indices);
+        if (results_scores) free(results_scores);
+        if (converted_columns) {
+            for (int d = 0; d < dim; d++) if (converted_columns[d]) free(converted_columns[d]);
+            free(converted_columns);
+        }
+        free(columns); free(col_bins); return enif_make_badarg(env);
+    }
 
     size_t result_count = fp_hnsw_search(
         res->index,
@@ -736,7 +776,11 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_mmap_f32(ErlNifEnv* env, int argc, 
     if (!columns) return enif_make_badarg(env);
 
     const ERL_NIF_TERM* tuple_elements;
-    enif_get_tuple(env, argv[0], &dim_int, &tuple_elements);
+    if (!enif_get_tuple(env, argv[0], &dim_int, &tuple_elements)) {
+        free(columns);
+        return enif_make_badarg(env);
+    }
+
 
     for (size_t d = 0; d < dim; d++) {
         mmap_res* res;

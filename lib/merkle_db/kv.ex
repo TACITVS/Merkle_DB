@@ -58,20 +58,6 @@ defmodule MerkleDb.KV do
     retry_command({:set_tree, collection, tree}, 20)
   end
 
-  defp retry_command(command, attempts) when attempts > 0 do
-    case Raft.process_command(command) do
-      :ok -> :ok
-      {:error, :noproc} ->
-        if rem(attempts, 5) == 0, do: Logger.debug("Waiting for Raft leader... (#{attempts} left)")
-        Process.sleep(1000)
-        retry_command(command, attempts - 1)
-      err ->
-        Logger.error("Raft command failed: #{inspect(err)}")
-        err
-    end
-  end
-  defp retry_command(_, _), do: {:error, :timeout}
-
   # ... other APIs simplified similarly ...
 
   @doc """
@@ -110,149 +96,68 @@ defmodule MerkleDb.KV do
   # ==================== Callbacks ====================
   @impl true
   def init(_) do
-    # 1. Load all existing collections from disk
-    collections = 
-      Persistence.list_collections()
-      |> Enum.reduce(%{}, fn name, acc ->
-        # Try checkpoint first (V2 persistence), then snapshot (V1)
-        tree_res = 
-          case Persistence.load_checkpoint(name) do
-            {:ok, tree} -> {:ok, tree}
-            _ -> 
-              case Persistence.load(collection: name) do
-                {:ok, %{tree: tree}} -> {:ok, tree}
-                _ -> :error
-              end
-          end
+    # KV now acts strictly as a proxy.
+    # Truth lives in the Raft state machine.
+    # We do NOT load collections or replay WAL here, 
+    # because Raft handles its own log recovery.
+    Logger.info("KV proxy initialized.")
+    {:ok, %{}}
+  end
 
-        case tree_res do
-          {:ok, tree} -> Map.put(acc, name, tree)
-          _ -> acc
+  # --- Callbacks for proxying (legacy support or local ops) ---
+
+  @impl true
+  def handle_call(:list_collections, _from, _state) do
+    {:reply, list_collections(), %{}}
+  end
+
+  @impl true
+  def handle_call({:snapshot, collection}, _from, _state) do
+    {:reply, snapshot(collection), %{}}
+  end
+
+  @impl true
+  def handle_call({:generation, collection}, _from, _state) do
+    {:reply, generation(collection), %{}}
+  end
+
+  @impl true
+  def handle_call({:checkpoint, collection}, _from, state) do
+    # Checkpoint is performed on the local node's state fetched from Raft
+    case snapshot(collection) do
+      %Tree{} = tree ->
+        case Persistence.save_checkpoint(tree, collection) do
+          {:ok, dir} -> 
+            Logger.info("Checkpoint saved to #{dir}")
+            {:reply, :ok, state}
+          err -> 
+            {:reply, err, state}
         end
-      end)
-    
-    # Ensure "default" exists
-    collections = Map.put_new(collections, "default", Tree.new())
-
-    # 2. Replay WAL to recover missing operations
-    wal_path = Application.get_env(:merkle_db, :wal_path, "data/wal.bin")
-    collections = 
-      case WAL.replay(wal_path) do
-        {:ok, entries} ->
-          if length(entries) > 0 do
-            Logger.info("Replaying #{length(entries)} WAL entries...")
-            res = Enum.reduce(entries, collections, fn entry, acc -> apply_wal_entry(acc, entry) end)
-            Logger.info("Replay finished.")
-            res
-          else
-            collections
-          end
-        _ -> 
-          collections
-      end
-    
-    Logger.info("KV init finished.")
-    {:ok, collections}
-  end
-
-  # --- Callbacks for local state (mostly read-only or legacy) ---
-
-  @impl true
-  def handle_call(:list_collections, _from, collections) do
-    {:reply, Map.keys(collections), collections}
-  end
-
-  @impl true
-  def handle_call({:snapshot, collection}, _from, collections) do
-    with {:ok, tree} <- get_tree(collections, collection) do
-      {:reply, tree, collections}
-    else
-      err -> {:reply, err, collections}
+      nil ->
+        {:reply, {:error, :collection_not_found}, state}
     end
   end
 
+  # Fallback for other calls
   @impl true
-  def handle_call({:generation, collection}, _from, collections) do
-    with {:ok, tree} <- get_tree(collections, collection) do
-      {:reply, tree.generation, collections}
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:checkpoint, collection}, _from, collections) do
-    # Checkpoint is performed on the local node's state
-    with {:ok, tree} <- get_tree(collections, collection) do
-      case Persistence.save_checkpoint(tree, collection) do
-        {:ok, dir} -> 
-          Logger.info("Checkpoint saved to #{dir}")
-          {:reply, :ok, collections}
-        err -> 
-          {:reply, err, collections}
-      end
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  # Fallback for other calls to avoid crashing if some were removed but still called internally
-  @impl true
-  def handle_call(msg, _from, collections) do
+  def handle_call(msg, _from, state) do
     Logger.warn("KV received unhandled call: #{inspect(msg)}")
-    {:reply, {:error, :unhandled}, collections}
+    {:reply, {:error, :unhandled}, state}
   end
 
   # ==================== Private Helpers ====================
 
-  defp apply_wal_entry(collections, {:upsert, {collection, key, vector, metadata, version}}) do
-    case get_tree(collections, collection) do
-      {:ok, tree} ->
-        if version > tree.last_wal_version do
-          new_tree = Tree.insert(tree, key, vector, metadata)
-          new_tree = %{new_tree | last_wal_version: version}
-          Map.put(collections, collection, new_tree)
-        else
-          collections
-        end
-      _ ->
-        # Create collection if it was mentioned in WAL but doesn't exist
-        new_tree = Tree.insert(Tree.new(), key, vector, metadata)
-        new_tree = %{new_tree | last_wal_version: version}
-        Map.put(collections, collection, new_tree)
+  defp retry_command(command, attempts) when attempts > 0 do
+    case Raft.process_command(command) do
+      :ok -> :ok
+      {:error, :noproc} ->
+        if rem(attempts, 5) == 0, do: Logger.debug("Waiting for Raft leader... (#{attempts} left)")
+        Process.sleep(1000)
+        retry_command(command, attempts - 1)
+      err ->
+        Logger.error("Raft command failed: #{inspect(err)}")
+        err
     end
   end
-
-  defp apply_wal_entry(collections, {:delete, data}) do
-    {collection, key, version} = case data do
-      {c, k, v} -> {c, k, v}
-      {c, k} -> {c, k, 0}
-    end
-
-    case get_tree(collections, collection) do
-      {:ok, tree} ->
-        if version == 0 or version > tree.last_wal_version do
-          case Tree.delete(tree, key) do
-            {:error, :not_found} -> collections
-            new_tree -> 
-              new_tree = if version > 0, do: %{new_tree | last_wal_version: version}, else: new_tree
-              Map.put(collections, collection, new_tree)
-          end
-        else
-          collections
-        end
-      _ -> collections
-    end
-  end
-
-  defp apply_wal_entry(collections, {:commit, {_collection, _root}}) do
-    collections
-  end
-
-  defp get_tree(collections, name) do
-    case Map.get(collections, name) do
-      nil -> {:error, :collection_not_found}
-      tree -> {:ok, tree}
-    end
-  end
+  defp retry_command(_, _), do: {:error, :timeout}
 end
