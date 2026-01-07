@@ -28,6 +28,33 @@ defmodule MerkleDb.Web.Router do
     conn |> put_resp_content_type("application/json") |> send_resp(200, json)
   end
 
+  post "/v1/collections/:collection" do
+    {:ok, body, conn} = read_body(conn)
+    opts = case Jason.decode(body) do
+      {:ok, %{} = p} -> 
+        # Map JSON keys to internal atoms (dim, precision)
+        Enum.map(p, fn {k, v} -> {String.to_atom(k), v} end)
+        |> Enum.map(fn 
+          {:precision, p} -> {:precision, String.to_atom(p)}
+          other -> other
+        end)
+      _ -> []
+    end
+
+    case KV.create_collection(collection, opts) do
+      :ok -> send_resp(conn, 201, Jason.encode!(%{status: "ok", message: "Collection created"}))
+      {:error, :already_exists} -> send_resp(conn, 409, Jason.encode!(%{error: "already_exists"}))
+      err -> send_resp(conn, 500, Jason.encode!(%{error: inspect(err)}))
+    end
+  end
+
+  delete "/v1/collections/:collection" do
+    case KV.drop_collection(collection) do
+      :ok -> send_resp(conn, 200, Jason.encode!(%{status: "ok", message: "Collection dropped"}))
+      err -> send_resp(conn, 500, Jason.encode!(%{error: inspect(err)}))
+    end
+  end
+
   post "/v1/:collection/checkpoint" do
     case KV.checkpoint(collection) do
       :ok ->

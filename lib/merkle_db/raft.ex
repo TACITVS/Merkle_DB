@@ -21,6 +21,18 @@ defmodule MerkleDb.Raft do
     # Configure ra to use our data directory
     Application.put_env(:ra, :data_dir, String.to_charlist(data_dir))
 
+    # Raft Tuning Parameters
+    # Election timeout: 500-1000ms (default is usually higher)
+    # Heartbeat: 100ms
+    # Snapshot threshold: 1000 entries
+    # Raft Tuning Parameters
+    Application.put_env(:ra, :data_dir, String.to_charlist(data_dir))
+    
+    # Tuning for faster elections in local dev/tests
+    Application.put_env(:ra, :election_timeout_min, 500)
+    Application.put_env(:ra, :election_timeout_max, 1000)
+    Application.put_env(:ra, :heartbeat_interval, 100)
+
     # Explicitly start ra system (required by newer versions)
     :ra_system.start_default()
 
@@ -40,6 +52,14 @@ defmodule MerkleDb.Raft do
     end
   end
   defp try_start_cluster(_, _), do: {:error, :timeout}
+
+  @doc """
+  Join an existing cluster.
+  """
+  def join_cluster(peer_node) do
+    peer_id = {:merkle_db_server, peer_node}
+    :ra.add_member(peer_id, server_id())
+  end
 
   @doc """
   Send a command to the Raft cluster leader.
