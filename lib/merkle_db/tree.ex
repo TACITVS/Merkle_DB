@@ -493,9 +493,8 @@ defmodule MerkleDb.Tree do
     Float.round(columns_mb + keys_mb + key_index_mb + metadata_mb + tombstones_mb + quantized_mb + hnsw_mb + sparse_mb, 2)
   end
 
-  @doc """
-  Get tree statistics.
-  """
+  @doc "Return human-readable stats"
+  def stats(nil), do: %{count: 0, dim: 0, precision: :unknown, has_ivf_index: false, has_hnsw_index: false}
   def stats(%__MODULE__{} = tree) do
     %{ 
       count: tree.count,

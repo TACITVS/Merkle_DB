@@ -15,6 +15,7 @@ defmodule MerkleDb.Application do
     children = [
       {Task.Supervisor, name: MerkleDb.TaskSupervisor},
       {Registry, keys: :unique, name: MerkleDb.StorageRegistry},
+      MerkleDb.Raft.Supervisor,
       MerkleDb.WAL,
       MerkleDb.FPDispatcher,
 

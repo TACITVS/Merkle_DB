@@ -546,7 +546,9 @@ defmodule MerkleDb.Query do
         |> Enum.take(k)
         |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
       else
-        # Metadata filter path
+        # Metadata filter path - Fallback path: Linear Scan (Slow)
+        # TODO: Fix and re-enable Bitmap Optimization (manual_nif_fp_query_gemv_bitmasked_f32)
+        
         flat_data = Tree.flatten(tree)
         
         scores_list = 
@@ -759,6 +761,41 @@ defmodule MerkleDb.Query do
     end
   end
   defp get_in_path(_value, _parts), do: nil
+
+  # ==================== Bitmap Indexing ====================
+
+  defp get_filter_bitmap(%Tree{inverted_index: index}, filters) when is_list(filters) do
+    # Only support simple AND of equality for V1
+    # filters: [field: val] or [{field, :eq, val}]
+    
+    Enum.reduce_while(filters, nil, fn filter, acc_bitmap ->
+      case normalize_filter(filter) do
+        {field, :eq, value} ->
+          field_map = Map.get(index, field, %{})
+          case Map.get(field_map, value) do
+            nil -> {:halt, :none} # Value not indexed, no matches possible
+            bitmap ->
+              new_acc = if acc_bitmap, do: ASM.fp_bitmap_and(acc_bitmap, bitmap), else: bitmap
+              {:cont, new_acc}
+          end
+        _ ->
+          # Unsupported filter type for bitmap indexing, fallback to scan
+          {:halt, nil}
+      end
+    end)
+    |> case do
+      :none -> <<0>> # No matches
+      res -> res
+    end
+  end
+
+  defp get_filter_bitmap(_, _), do: nil
+
+  defp normalize_filter({field, value}) when is_binary(field) or is_atom(field), do: {to_string(field), :eq, value}
+  defp normalize_filter({field, :eq, value}), do: {to_string(field), :eq, value}
+  defp normalize_filter({field, "==", value}), do: {to_string(field), :eq, value}
+  defp normalize_filter([field, op, value]), do: normalize_filter({field, op, value})
+  defp normalize_filter(_), do: :other
 
   defp safe_existing_atom(value) do
     try do
