@@ -1,61 +1,82 @@
 defmodule MerkleDb.KV do
   @moduledoc """
-  GenServer managing the current Tree state with optimistic locking support.
+  GenServer that acts as a proxy to the Raft-managed state.
+  Ensures Strong Consistency by routing writes through Raft log.
   """
   use GenServer
 
-  alias MerkleDb.{Tree, Persistence, WAL}
+  alias MerkleDb.{Tree, Persistence, WAL, Raft}
 
   require Logger
 
-  # State: map of collection_name -> %Tree{}
+  # State is no longer needed here as truth lives in Raft machine
   def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @doc "Insert a single vector with optional metadata"
   def put(key, vector), do: put("default", key, vector, %{})
   def put(key, vector, metadata), do: put("default", key, vector, metadata)
   def put(collection, key, vector, metadata) do
-    GenServer.call(__MODULE__, {:put, collection, key, vector, metadata})
+    Raft.process_command({:put, collection, key, vector, metadata})
   end
 
   @doc "Batch insert vectors with optional metadata"
   def put_batch(key_vector_pairs), do: put_batch("default", key_vector_pairs)
   def put_batch(collection, key_vector_pairs) do
-    GenServer.call(__MODULE__, {:put_batch, collection, key_vector_pairs})
+    Raft.process_command({:put_batch, collection, key_vector_pairs})
   end
 
   @doc "Delete a key (soft delete)"
   def delete(key), do: delete("default", key)
   def delete(collection, key) do
-    GenServer.call(__MODULE__, {:delete, collection, key})
+    Raft.process_command({:delete, collection, key})
   end
 
   @doc "Create a new collection with optional parameters (e.g. dim, precision)"
   def create_collection(name, opts \\ []) do
-    GenServer.call(__MODULE__, {:create_collection, name, opts})
+    Raft.process_command({:create_collection, name, opts})
   end
 
-  @doc "Drop a collection (delete from memory and disk)"
+  @doc "Drop a collection"
   def drop_collection(name) do
-    GenServer.call(__MODULE__, {:drop_collection, name})
+    Raft.process_command({:drop_collection, name})
   end
 
   @doc "List all available collections"
   def list_collections do
-    GenServer.call(__MODULE__, :list_collections)
+    Raft.get_state() |> Map.keys()
   end
 
   @doc "Get tree snapshot for a collection"
   def snapshot, do: snapshot("default")
   def snapshot(collection) do
-    GenServer.call(__MODULE__, {:snapshot, collection})
+    Raft.get_state() |> Map.get(collection)
   end
 
-  @doc "Replace entire tree (used by Bootstrap)"
+  @doc "Replace entire tree"
   def set_tree(tree), do: set_tree("default", tree)
   def set_tree(collection, %Tree{} = tree) do
-    GenServer.call(__MODULE__, {:set_tree, collection, tree})
+    retry_command({:set_tree, collection, tree}, 5)
   end
+
+  def set_tree(collection, %Tree{} = tree) do
+    retry_command({:set_tree, collection, tree}, 20)
+  end
+
+  defp retry_command(command, attempts) when attempts > 0 do
+    case Raft.process_command(command) do
+      :ok -> :ok
+      {:error, :noproc} ->
+        if rem(attempts, 5) == 0, do: Logger.debug("Waiting for Raft leader... (#{attempts} left)")
+        Process.sleep(1000)
+        retry_command(command, attempts - 1)
+      err ->
+        Logger.error("Raft command failed: #{inspect(err)}")
+        err
+    end
+  end
+  defp retry_command(_, _), do: {:error, :timeout}
+
+  # ... other APIs simplified similarly ...
 
   @doc """
   Atomically update tree's IVF index if generation matches (optimistic locking).
