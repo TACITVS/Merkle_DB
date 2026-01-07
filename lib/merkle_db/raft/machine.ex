@@ -98,7 +98,12 @@ defmodule MerkleDb.Raft.Machine do
 
   # State snapshots for Raft log truncation
   @impl :ra_machine
-  def state_enter(_role, _state), do: []
+  def state_enter(_role, state) do
+    # When entering a role (or specifically during periodic snapshotting),
+    # we return side-effects. Returning a {:snapshot, state} side-effect
+    # tells Ra to truncate the log and save this state as a snapshot.
+    [{:snapshot, state}]
+  end
 
   @impl :ra_machine
   def tick(_time, _state), do: []
