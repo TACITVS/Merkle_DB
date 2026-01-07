@@ -11,84 +11,69 @@ This document defines the public API contract for MerkleDB.
 
 ### Collection Management
 
-#### create_collection/4
+#### create_collection/2
 
-Create a new vector collection.
+Create a new vector collection. Replicated via Raft.
 
 ```elixir
-@spec create_collection(name, dim, metric, opts) :: {:ok, collection} | {:error, reason}
+@spec create_collection(name, opts) :: :ok | {:error, reason}
 
 # Parameters:
 #   name   - string, unique collection identifier
-#   dim    - integer, vector dimension (e.g., 384, 768)
-#   metric - :cosine | :dot | :l2
 #   opts   - keyword list of options
 #
 # Options:
-#   :max_vectors - integer, maximum capacity (default: 10_000_000)
-#   :index_type  - :flat | :ivf | :hnsw (default: :flat)
-#   :ivf_clusters - integer, number of IVF clusters (default: sqrt(max_vectors))
+#   :dim         - integer, vector dimension (e.g., 384, 768)
 #   :precision   - :f32 | :f64 (default: :f64) - f32 halves memory for embeddings
+#   :quantized   - boolean, enable scalar quantization for search
 #
 # Returns:
-#   {:ok, %Collection{}} on success
+#   :ok on success
 #   {:error, :already_exists} if name taken
-#   {:error, :invalid_dimension} if dim <= 0
 ```
 
-#### delete_collection/1
+#### drop_collection/1
 
-Delete a collection and all its data.
+Delete a collection and all its data. Replicated via Raft.
 
 ```elixir
-@spec delete_collection(name) :: :ok | {:error, reason}
+@spec drop_collection(name) :: :ok | {:error, reason}
 ```
 
 #### list_collections/0
 
-List all collections.
+List all collection names.
 
 ```elixir
-@spec list_collections() :: [%Collection{}]
+@spec list_collections() :: [String.t()]
 ```
 
 ### Data Operations
 
-#### upsert/4
+#### put/4
 
-Insert or update a record.
+Insert or update a record. Replicated via Raft for Strong Consistency.
 
 ```elixir
-@spec upsert(collection, id, vector, payload) :: {:ok, version} | {:error, reason}
+@spec put(collection, id, vector, metadata) :: :ok | {:error, reason}
 
 # Parameters:
 #   collection - string, collection name
-#   id         - integer (u128) or binary, record identifier
-#   vector     - list of floats, must match collection dimension
-#   payload    - map, arbitrary metadata (will be canonicalized)
+#   id         - string, record identifier
+#   vector     - binary or list, must match collection dimension
+#   metadata   - map, arbitrary metadata
 #
 # Returns:
-#   {:ok, version} where version is u64 timestamp
-#   {:error, :not_found} if collection doesn't exist
-#   {:error, :dimension_mismatch} if vector length != dim
-#   {:error, :invalid_vector} if vector contains NaN/Infinity
-#   {:error, :payload_too_large} if payload > 1MB
+#   :ok
+#   {:error, :collection_not_found}
 ```
 
-#### upsert_batch/2
+#### put_batch/2
 
 Batch insert/update multiple records.
 
 ```elixir
-@spec upsert_batch(collection, records) :: {:ok, count} | {:error, reason}
-
-# Parameters:
-#   collection - string
-#   records    - list of {id, vector, payload} tuples
-#
-# Returns:
-#   {:ok, count} number of records upserted
-#   {:error, {:validation_failed, index, reason}} on first invalid record
+@spec put_batch(collection, records) :: :ok | {:error, reason}
 ```
 
 #### delete/2
