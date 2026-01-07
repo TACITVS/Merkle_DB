@@ -309,6 +309,7 @@ defmodule MerkleDb.Replication do
     _ -> map
   end
 
+  defp export_vectors(nil), do: []
   defp export_vectors(tree) do
     # Export all vectors with their keys
     if tree.count > 0 do

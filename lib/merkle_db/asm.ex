@@ -585,8 +585,6 @@ def fp_query_gemv_f32_batch(_db_vectors_bin, _query_bin, _count, _dim), do: :erl
 def fp_vector_sum_f32(_vectors_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_quantize_f64_to_u8"
 def fp_quantize_f64_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
-@doc "Calls C function: fp_quantize_f32_to_u8"
-def fp_quantize_f32_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_quantized"
 def fp_query_gemv_quantized(_columns_tuple, _query_bin, _bias, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_query_gemv_quantized_f32"
@@ -603,8 +601,6 @@ def fp_query_gemv_bitmasked_f32(_columns_tuple, _query_bin, _bitmap_bin, _count,
 def fp_bitmap_set(_bitmap_bin, _index), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_bitmap_and"
 def fp_bitmap_and(_bitmap_a, _bitmap_b), do: :erlang.nif_error(:nif_not_loaded)
-@doc "Calls C function: fp_hnsw_create"
-def fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_insert"
 def fp_hnsw_insert(_hnsw_res, _vector_idx, _vec_bin, _columns_tuple, _count), do: :erlang.nif_error(:nif_not_loaded)
 @doc "Calls C function: fp_hnsw_search"
@@ -689,5 +685,29 @@ input: binary data to hash
 Returns: 32-byte hash binary
 """
 def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- HNSW Manual Wrappers ---
+
+@doc """
+Create HNSW index with validation.
+"""
+def fp_hnsw_create(dim, m, ef_construction, capacity) do
+  if dim <= 0 or m <= 0 or ef_construction <= 0 or capacity <= 0, do: raise ArgumentError, "Invalid parameters"
+  nif_fp_hnsw_create(dim, m, ef_construction, capacity)
+end
+
+def nif_fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- Quantization Manual Wrappers ---
+
+@doc """
+Quantize f32 to u8 with validation.
+"""
+def fp_quantize_f32_to_u8(in_bin, min_val, inv_scale) do
+  if rem(byte_size(in_bin), 4) != 0, do: raise ArgumentError, "Binary size must be multiple of 4"
+  nif_fp_quantize_f32_to_u8(in_bin, min_val, inv_scale)
+end
+
+def nif_fp_quantize_f32_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 
 end

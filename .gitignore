@@ -87,6 +87,8 @@ build_ivf_fix.bat
 *~
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
 
 # ------------------------------------------------------------------------------
 # Scripts Output (build artifacts)

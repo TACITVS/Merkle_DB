@@ -1,7 +1,6 @@
 defmodule MerkleDb.Web.Router do
   use Plug.Router
   alias MerkleDb.{Bootstrap, Filter, KV, PayloadStore, Persistence, Query, Replication, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
-  alias MerkleDb.Web.Auth
 
   plug Plug.Static,
     at: "/",

@@ -60,7 +60,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_query_gemv_indexed", 5, "nif_fp_query_gemv_indexed", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_topk", 4, "nif_fp_query_topk", 0},
     {"fp_quantize_f64_to_u8", 3, "nif_fp_quantize_f64_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
-    {"fp_quantize_f32_to_u8", 3, "nif_fp_quantize_f32_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"nif_fp_quantize_f32_to_u8", 3, "nif_fp_quantize_f32_to_u8", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_gemv_quantized", 5, "nif_fp_query_gemv_quantized", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_gemv_quantized_f32", 5, "manual_nif_fp_query_gemv_quantized_f32", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_sparse_dotp", 4, "nif_fp_sparse_dotp", 0},
@@ -69,7 +69,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_query_gemv_bitmasked_f32", 5, "manual_nif_fp_query_gemv_bitmasked_f32", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_bitmap_set", 2, "manual_nif_fp_bitmap_set", 0},
     {"fp_bitmap_and", 2, "manual_nif_fp_bitmap_and", 0},
-    {"fp_hnsw_create", 4, "nif_fp_hnsw_create", 0},
+    {"nif_fp_hnsw_create", 4, "nif_fp_hnsw_create", 0},
     {"fp_hnsw_insert", 5, "nif_fp_hnsw_insert", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_hnsw_search", 6, "nif_fp_hnsw_search", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_pca_transform_result", 3, "nif_fp_pca_transform_result", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
@@ -89,7 +89,6 @@ defmodule BridgeGeneratorV7 do
     {"fp_query_gemv_f32_batch", ["db_vectors_bin", "query_bin", "count", "dim"]},
     {"fp_vector_sum_f32", ["vectors_bin", "count", "dim"]},
     {"fp_quantize_f64_to_u8", ["in_bin", "min_val", "inv_scale"]},
-    {"fp_quantize_f32_to_u8", ["in_bin", "min_val", "inv_scale"]},
     {"fp_query_gemv_quantized", ["columns_tuple", "query_bin", "bias", "count", "dim"]},
     {"fp_query_gemv_quantized_f32", ["columns_tuple", "query_bin", "bias", "count", "dim"]},
     {"fp_sparse_dotp", ["indices_a", "values_a", "indices_b", "values_b"]},
@@ -98,7 +97,6 @@ defmodule BridgeGeneratorV7 do
     {"fp_query_gemv_bitmasked_f32", ["columns_tuple", "query_bin", "bitmap_bin", "count", "dim"]},
     {"fp_bitmap_set", ["bitmap_bin", "index"]},
     {"fp_bitmap_and", ["bitmap_a", "bitmap_b"]},
-    {"fp_hnsw_create", ["dim", "m", "ef_construction", "capacity"]},
     {"fp_hnsw_insert", ["hnsw_res", "vector_idx", "vec_bin", "columns_tuple", "count"]},
     {"fp_hnsw_search", ["hnsw_res", "query_bin", "k", "ef_search", "columns_tuple", "count"]},
     {"fp_pca_transform_result", ["pca_result", "data_bin", "count"]},
@@ -485,6 +483,30 @@ input: binary data to hash
 Returns: 32-byte hash binary
 \"\"\"
 def fp_blake3_hash(_input), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- HNSW Manual Wrappers ---
+
+@doc \"\"\"
+Create HNSW index with validation.
+\"\"\"
+def fp_hnsw_create(dim, m, ef_construction, capacity) do
+  if dim <= 0 or m <= 0 or ef_construction <= 0 or capacity <= 0, do: raise ArgumentError, "Invalid parameters"
+  nif_fp_hnsw_create(dim, m, ef_construction, capacity)
+end
+
+def nif_fp_hnsw_create(_dim, _m, _ef_construction, _capacity), do: :erlang.nif_error(:nif_not_loaded)
+
+# --- Quantization Manual Wrappers ---
+
+@doc \"\"\"
+Quantize f32 to u8 with validation.
+\"\"\"
+def fp_quantize_f32_to_u8(in_bin, min_val, inv_scale) do
+  if rem(byte_size(in_bin), 4) != 0, do: raise ArgumentError, "Binary size must be multiple of 4"
+  nif_fp_quantize_f32_to_u8(in_bin, min_val, inv_scale)
+end
+
+def nif_fp_quantize_f32_to_u8(_in_bin, _min_val, _inv_scale), do: :erlang.nif_error(:nif_not_loaded)
 """
 
     File.write!(@ex_module_out, "defmodule MerkleDb.ASM do\n  @on_load :load_nifs\n  def load_nifs do\n    priv_dir =\n      case :code.priv_dir(:merkle_db) do\n        {:error, _} ->\n          Path.expand(\"../../priv\", __DIR__)\n        dir ->\n          List.to_string(dir)\n      end\n\n    base_path = Path.join(priv_dir, \"merkle_nif\")\n    path =\n      if nif_exists?(base_path) do\n        base_path\n      else\n        Path.join(Path.expand(\"../../priv\", __DIR__), \"merkle_nif\")\n      end\n\n    case :erlang.load_nif(String.to_charlist(path), 0) do\n      :ok -> :ok\n      {:error, {:already_loaded, _}} -> :ok\n      {:error, reason} -> {:error, reason}\n    end\n  end\n\n  defp nif_exists?(base_path) do\n    Enum.any?([\".dll\", \".so\", \".dylib\"], fn ext ->\n      File.exists?(base_path <> ext)\n    end)\n  end\n#{defs}\n\n#{extra_defs}\n\n# --- Struct Accessors ---\n#{accessor_defs}#{query_functions}\nend")
