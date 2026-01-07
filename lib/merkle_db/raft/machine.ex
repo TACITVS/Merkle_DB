@@ -9,7 +9,10 @@ defmodule MerkleDb.Raft.Machine do
 
   @impl :ra_machine
   def init(_conf) do
-    # Initial state is an empty map of collections
+    # Ensure the directory for this specific server exists if it needs to store segments
+    # Ra usually handles this, but the segment_writer was reporting enoent during heavy load.
+    # However, Machine init doesn't have easy access to the server ID or data_dir.
+    # We'll rely on the default %{} state.
     %{}
   end
 
@@ -52,6 +55,30 @@ defmodule MerkleDb.Raft.Machine do
 
       {:set_tree, collection, tree} ->
         {Map.put(collections, collection, tree), :ok}
+
+      {:update_index, collection, new_tree, expected_gen} ->
+        with {:ok, current_tree} <- get_tree(collections, collection) do
+          if current_tree.generation == expected_gen do
+            updated_tree = %{current_tree |
+              centroids: new_tree.centroids,
+              clusters: new_tree.clusters,
+              hnsw: new_tree.hnsw,
+              generation: current_tree.generation + 1
+            }
+            {Map.put(collections, collection, updated_tree), :ok}
+          else
+            {collections, {:error, :generation_mismatch}}
+          end
+        else
+          err -> {collections, err}
+        end
+
+      {:reset, collection} ->
+        if Map.has_key?(collections, collection) do
+          {Map.put(collections, collection, Tree.new()), :ok}
+        else
+          {collections, {:error, :collection_not_found}}
+        end
 
       {:drop_collection, name} ->
         {Map.delete(collections, name), :ok}

@@ -55,10 +55,6 @@ defmodule MerkleDb.KV do
   @doc "Replace entire tree"
   def set_tree(tree), do: set_tree("default", tree)
   def set_tree(collection, %Tree{} = tree) do
-    retry_command({:set_tree, collection, tree}, 5)
-  end
-
-  def set_tree(collection, %Tree{} = tree) do
     retry_command({:set_tree, collection, tree}, 20)
   end
 
@@ -83,26 +79,33 @@ defmodule MerkleDb.KV do
   """
   def update_index(tree, expected_generation), do: update_index("default", tree, expected_generation)
   def update_index(collection, %Tree{} = new_tree, expected_generation) do
-    GenServer.call(__MODULE__, {:update_index, collection, new_tree, expected_generation})
+    Raft.process_command({:update_index, collection, new_tree, expected_generation})
   end
 
   @doc "Get current tree generation"
   def generation, do: generation("default")
   def generation(collection) do
-    GenServer.call(__MODULE__, {:generation, collection})
+    case Raft.get_state() |> Map.get(collection) do
+      nil -> {:error, :collection_not_found}
+      tree -> tree.generation
+    end
   end
 
   @doc "Reset a collection to empty state"
   def reset(collection \\ "default") do
-    GenServer.call(__MODULE__, {:reset, collection})
+    Raft.process_command({:reset, collection})
   end
 
   @doc "Create a fast binary checkpoint for instant startup"
   def checkpoint(collection \\ "default") do
+    # Checkpoint is still somewhat local to the node's disk, 
+    # but we should probably trigger it via Raft to ensure all nodes do it?
+    # Or just let it be a local node operation.
+    # For now, let's keep it as a GenServer call if it's meant to be local,
+    # OR route it through Raft if we want a cluster-wide checkpoint.
+    # Given the original code, it was a GenServer.call.
     GenServer.call(__MODULE__, {:checkpoint, collection})
   end
-
-  # ==================== Callbacks ====================
 
   # ==================== Callbacks ====================
   @impl true
@@ -152,6 +155,56 @@ defmodule MerkleDb.KV do
     {:ok, collections}
   end
 
+  # --- Callbacks for local state (mostly read-only or legacy) ---
+
+  @impl true
+  def handle_call(:list_collections, _from, collections) do
+    {:reply, Map.keys(collections), collections}
+  end
+
+  @impl true
+  def handle_call({:snapshot, collection}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      {:reply, tree, collections}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:generation, collection}, _from, collections) do
+    with {:ok, tree} <- get_tree(collections, collection) do
+      {:reply, tree.generation, collections}
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  @impl true
+  def handle_call({:checkpoint, collection}, _from, collections) do
+    # Checkpoint is performed on the local node's state
+    with {:ok, tree} <- get_tree(collections, collection) do
+      case Persistence.save_checkpoint(tree, collection) do
+        {:ok, dir} -> 
+          Logger.info("Checkpoint saved to #{dir}")
+          {:reply, :ok, collections}
+        err -> 
+          {:reply, err, collections}
+      end
+    else
+      err -> {:reply, err, collections}
+    end
+  end
+
+  # Fallback for other calls to avoid crashing if some were removed but still called internally
+  @impl true
+  def handle_call(msg, _from, collections) do
+    Logger.warn("KV received unhandled call: #{inspect(msg)}")
+    {:reply, {:error, :unhandled}, collections}
+  end
+
+  # ==================== Private Helpers ====================
+
   defp apply_wal_entry(collections, {:upsert, {collection, key, vector, metadata, version}}) do
     case get_tree(collections, collection) do
       {:ok, tree} ->
@@ -194,181 +247,6 @@ defmodule MerkleDb.KV do
 
   defp apply_wal_entry(collections, {:commit, {_collection, _root}}) do
     collections
-  end
-
-  # --- Collection Management ---
-
-  @impl true
-  def handle_call({:create_collection, name, opts}, _from, collections) do
-    if Map.has_key?(collections, name) do
-      {:reply, {:error, :already_exists}, collections}
-    else
-      new_tree = Tree.new(opts)
-      {:reply, :ok, Map.put(collections, name, new_tree)}
-    end
-  end
-
-  @impl true
-  def handle_call({:drop_collection, name}, _from, collections) do
-    if name == "default" do
-      # Cannot drop default, but can reset it?
-      # For safety, let's just reset it to empty
-      new_collections = Map.put(collections, "default", Tree.new())
-      Persistence.delete("default")
-      {:reply, :ok, new_collections}
-    else
-      new_collections = Map.delete(collections, name)
-      Persistence.delete(name)
-      {:reply, :ok, new_collections}
-    end
-  end
-
-  @impl true
-  def handle_call(:list_collections, _from, collections) do
-    {:reply, Map.keys(collections), collections}
-  end
-
-  # --- Tree Operations ---
-
-  @impl true
-  def handle_call({:put, collection, key, vector, metadata}, _from, collections) do
-    # 1. Log to WAL first for durability
-    version = System.system_time(:microsecond)
-    :ok = WAL.append_upsert(WAL, {collection, key, vector, metadata, version})
-
-    with {:ok, tree} <- get_tree(collections, collection) do
-      new_tree = Tree.insert(tree, key, vector, metadata)
-      new_tree = %{new_tree | last_wal_version: version}
-      
-      check_auto_index(collection, new_tree)
-      
-      {:reply, :ok, Map.put(collections, collection, new_tree)}
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:put_batch, collection, pairs}, _from, collections) do
-    # Log each pair to WAL without immediate sync
-    version = System.system_time(:microsecond)
-    Enum.each(pairs, fn
-      {key, vec} -> WAL.append_upsert(WAL, {collection, key, vec, %{}, version}, sync: false)
-      {key, vec, meta} -> WAL.append_upsert(WAL, {collection, key, vec, meta, version}, sync: false)
-    end)
-    
-    # Sync WAL once for the whole batch
-    WAL.sync()
-
-    with {:ok, tree} <- get_tree(collections, collection) do
-      new_tree = Tree.insert_batch(tree, pairs)
-      new_tree = %{new_tree | last_wal_version: version}
-      Logger.info("put_batch finished for #{collection}, count=#{length(pairs)}")
-      
-      check_auto_index(collection, new_tree)
-      
-      {:reply, :ok, Map.put(collections, collection, new_tree)}
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  defp check_auto_index(collection, tree) do
-    # Trigger indexing if > 1000 items and no index (HNSW or IVF)
-    if tree.count > 1000 and tree.hnsw == nil and tree.centroids == nil do
-      MerkleDb.IndexBuilder.trigger_auto_build(collection, tree.count)
-    end
-  end
-
-  @impl true
-  def handle_call({:delete, collection, key}, _from, collections) do
-    # Log to WAL
-    version = System.system_time(:microsecond)
-    :ok = WAL.append_delete(WAL, {collection, key, version})
-
-    with {:ok, tree} <- get_tree(collections, collection) do
-      case Tree.delete(tree, key) do
-        {:error, :not_found} ->
-          {:reply, {:error, :not_found}, collections}
-        new_tree ->
-          new_tree = %{new_tree | last_wal_version: version}
-          {:reply, :ok, Map.put(collections, collection, new_tree)}
-      end
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:snapshot, collection}, _from, collections) do
-    with {:ok, tree} <- get_tree(collections, collection) do
-      {:reply, tree, collections}
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:set_tree, collection, new_tree}, _from, collections) do
-    # Implicitly creates collection if not exists
-    {:reply, :ok, Map.put(collections, collection, new_tree)}
-  end
-
-  @impl true
-  def handle_call({:update_index, collection, new_tree, expected_gen}, _from, collections) do
-    with {:ok, current_tree} <- get_tree(collections, collection) do
-      if current_tree.generation == expected_gen do
-        updated_tree = %{current_tree |
-          centroids: new_tree.centroids,
-          clusters: new_tree.clusters,
-          hnsw: new_tree.hnsw, # Also update HNSW if present
-          generation: current_tree.generation + 1
-        }
-        {:reply, :ok, Map.put(collections, collection, updated_tree)}
-      else
-        {:reply, {:error, :generation_mismatch}, collections}
-      end
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:generation, collection}, _from, collections) do
-    with {:ok, tree} <- get_tree(collections, collection) do
-      {:reply, tree.generation, collections}
-    else
-      err -> {:reply, err, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:reset, collection}, _from, collections) do
-    if Map.has_key?(collections, collection) do
-      new_collections = Map.put(collections, collection, Tree.new())
-      Persistence.delete(collection)
-      {:reply, :ok, new_collections}
-    else
-      {:reply, {:error, :collection_not_found}, collections}
-    end
-  end
-
-  @impl true
-  def handle_call({:checkpoint, collection}, _from, collections) do
-    with {:ok, tree} <- get_tree(collections, collection) do
-      # 1. Flush WAL (ensure everything on disk is in the tree) - implicitly handled by memory state
-      # 2. Save Checkpoint
-      case Persistence.save_checkpoint(tree, collection) do
-        {:ok, dir} -> 
-          # 3. Truncate WAL logic would go here (update last_persisted_version)
-          Logger.info("Checkpoint saved to #{dir}")
-          {:reply, :ok, collections}
-        err -> 
-          {:reply, err, collections}
-      end
-    else
-      err -> {:reply, err, collections}
-    end
   end
 
   defp get_tree(collections, name) do
