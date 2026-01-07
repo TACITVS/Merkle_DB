@@ -352,7 +352,7 @@ defmodule MerkleDb.Tree do
       if tree.dim > 0 do
         to_f64_list(first_v, tree.dim)
       else
-        # Try f32 first if size matches common embed dims (300, 384, 768, 1024, 1536)
+        # Try f32 first if size matches common embed dims
         if is_binary(first_v) and byte_size(first_v) in [1200, 1536, 3072, 4096, 6144] do
            for <<f::float-little-32 <- first_v>>, do: f
         else
@@ -385,12 +385,23 @@ defmodule MerkleDb.Tree do
         {key, norm_bin, meta}
       end
 
-    batch_keys = Enum.map(normalized_triplets, fn {k, _, _} -> k end)
+    # 1. Handle existing keys in DB
     updated_tombstones = 
-      Enum.reduce(batch_keys, tree.tombstones, fn key, acc ->
+      Enum.reduce(normalized_triplets, tree.tombstones, fn {key, _, _}, acc ->
         case Map.get(tree.key_index, key) do
           nil -> acc
           old_idx -> MapSet.put(acc, old_idx)
+        end
+      end)
+
+    # 2. Handle duplicates WITHIN the batch
+    {intra_batch_tombstones, _seen} = 
+      normalized_triplets
+      |> Enum.with_index(tree.count)
+      |> Enum.reduce({updated_tombstones, %{}}, fn {{key, _, _}, idx}, {tombs, seen} ->
+        case Map.get(seen, key) do
+          nil -> {tombs, Map.put(seen, key, idx)}
+          prev_idx -> {MapSet.put(tombs, prev_idx), Map.put(seen, key, idx)}
         end
       end)
       
@@ -403,11 +414,11 @@ defmodule MerkleDb.Tree do
         IO.iodata_to_binary([col_bin | new_values])
       end
 
-    {new_keys, new_key_index, final_tombstones, final_metadata, final_inverted} = 
+    {new_keys, new_key_index, final_metadata, final_inverted} = 
       normalized_triplets
       |> Enum.with_index(tree.count)
-      |> Enum.reduce({tree.keys, tree.key_index, updated_tombstones, tree.metadata, tree.inverted_index}, 
-         fn {{key, _vec, meta}, idx}, {keys_acc, key_index_acc, tombs_acc, meta_acc, inverted_acc} ->
+      |> Enum.reduce({tree.keys, tree.key_index, tree.metadata, tree.inverted_index}, 
+         fn {{key, _vec, meta}, idx}, {keys_acc, key_index_acc, meta_acc, inverted_acc} ->
         
         meta_acc = if meta == %{}, do: meta_acc, else: Map.put(meta_acc, idx, meta)
         inverted_acc = if meta == %{}, do: inverted_acc, else: update_inverted_index(inverted_acc, idx, meta)
@@ -415,7 +426,6 @@ defmodule MerkleDb.Tree do
         {
           Map.put(keys_acc, idx, key),
           Map.put(key_index_acc, key, idx),
-          tombs_acc,
           meta_acc,
           inverted_acc
         }
@@ -425,7 +435,7 @@ defmodule MerkleDb.Tree do
       columns: List.to_tuple(column_updates),
       keys: new_keys,
       key_index: new_key_index,
-      tombstones: final_tombstones,
+      tombstones: intra_batch_tombstones,
       metadata: final_metadata,
       inverted_index: final_inverted,
       count: new_count,
@@ -461,16 +471,16 @@ defmodule MerkleDb.Tree do
     end
   end
 
-    @doc """
-    Estimate memory usage in MB.
-    """
-    def estimate_memory_mb(%__MODULE__{count: count, dim: dim, precision: prec} = tree) do
-      # columns: count * dim * size bytes
-      elem_size = if prec == :f32, do: 4, else: 8
-      columns_mb = (count * dim * elem_size) / (1024 * 1024)
-      keys_mb = (count * 50) / (1024 * 1024)
-      key_index_mb = (count * 50) / (1024 * 1024)
-      
+  @doc """
+  Estimate memory usage in MB.
+  """
+  def estimate_memory_mb(%__MODULE__{count: count, dim: dim, precision: prec} = tree) do
+    # columns: count * dim * size bytes
+    elem_size = if prec == :f32, do: 4, else: 8
+    columns_mb = (count * dim * elem_size) / (1024 * 1024)
+    keys_mb = (count * 50) / (1024 * 1024)
+    key_index_mb = (count * 50) / (1024 * 1024)
+    
     metadata_count = if tree.metadata, do: map_size(tree.metadata), else: 0
     metadata_mb = (metadata_count * 100) / (1024 * 1024)
     tombstones_count = if tree.tombstones, do: MapSet.size(tree.tombstones), else: 0

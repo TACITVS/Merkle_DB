@@ -15,23 +15,30 @@ defmodule MerkleDb.Raft do
     machine = {:module, MerkleDb.Raft.Machine, %{}}
 
     # 3. Start the Raft server on this node
-    data_dir = Path.join(File.cwd!(), "data/raft")
+    base_dir = Path.join(File.cwd!(), "data/raft")
     # Add server-specific subdir to avoid path conflicts and segment writer enoent
-    server_dir = Path.join(data_dir, to_string(node()))
+    server_dir = Path.join(base_dir, to_string(node()))
     File.mkdir_p!(server_dir)
     
     # Raft Tuning Parameters
+    # Set data_dir to the server-specific directory
     Application.put_env(:ra, :data_dir, String.to_charlist(server_dir))
     
     # Tuning for faster elections in local dev/tests
-    Application.put_env(:ra, :election_timeout_min, 500)
-    Application.put_env(:ra, :election_timeout_max, 1000)
-    Application.put_env(:ra, :heartbeat_interval, 100)
+    # Increased for stability on older hardware
+    Application.put_env(:ra, :election_timeout_min, 1000)
+    Application.put_env(:ra, :election_timeout_max, 2000)
+    Application.put_env(:ra, :heartbeat_interval, 200)
 
     # Explicitly start ra system (required by newer versions)
-    :ra_system.start_default()
+    # Use a case to handle already_started if it happens
+    case :ra_system.start_default() do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+      err -> IO.inspect(err, label: "Ra System Start Failed")
+    end
 
-    try_start_cluster(machine, 5)
+    try_start_cluster(machine, 10)
   end
 
   defp try_start_cluster(machine, attempts) when attempts > 0 do
@@ -39,11 +46,12 @@ defmodule MerkleDb.Raft do
       {:ok, _, _} -> :ok
       {:error, {:already_exists, _}} -> :ok
       {:error, :system_not_started} ->
-        Process.sleep(500)
+        Process.sleep(1000)
         try_start_cluster(machine, attempts - 1)
       err ->
         IO.inspect(err, label: "Raft Cluster Start Failed")
-        err
+        Process.sleep(1000)
+        try_start_cluster(machine, attempts - 1)
     end
   end
   defp try_start_cluster(_, _), do: {:error, :timeout}
@@ -61,14 +69,12 @@ defmodule MerkleDb.Raft do
   """
   def process_command(command) do
     case :ra.process_command(server_id(), command) do
-      {:ok, result, _leader} -> result
-      err ->
-        # If no leader, we might be in election
-        Process.sleep(1000)
-        case :ra.process_command(server_id(), command) do
-          {:ok, res, _} -> res
-          _ -> err
-        end
+      {:ok, result, leader} -> {:ok, result, leader}
+      {:error, :leader_not_known} ->
+        # Retry once after a short wait if leader is not known
+        Process.sleep(500)
+        :ra.process_command(server_id(), command)
+      err -> err
     end
   end
 

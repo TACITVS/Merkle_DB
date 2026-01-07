@@ -642,7 +642,14 @@ dim: dimension
 
 Returns: scores binary (count*8 bytes)
 """
-def fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+def fp_query_gemv_columnar(columns_tuple, query_bin, count, dim) do
+  if dim > 100_000, do: raise ArgumentError, "Dimension too large"
+  if tuple_size(columns_tuple) != dim, do: raise ArgumentError, "Columns tuple size must match dim"
+  if byte_size(query_bin) != dim * 8, do: raise ArgumentError, "Query binary size must be dim * 8"
+  nif_fp_query_gemv_columnar(columns_tuple, query_bin, count, dim)
+end
+
+def nif_fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 
 @doc """
 Indexed columnar GEMV for IVF search.

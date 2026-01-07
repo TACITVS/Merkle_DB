@@ -5,6 +5,7 @@ defmodule MerkleDb.Persistence do
   """
 
   alias MerkleDb.ASM
+  require Logger
 
   @magic <<77, 68, 66, 83>>
   @version 1

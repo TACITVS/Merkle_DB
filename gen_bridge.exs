@@ -53,7 +53,7 @@ defmodule BridgeGeneratorV7 do
     {"fp_job_status", 1, "nif_fp_job_status", 0},
     {"fp_job_result", 1, "nif_fp_job_result", 0},
     {"fp_job_cancel", 1, "nif_fp_job_cancel", 0},
-    {"fp_query_gemv_columnar", 4, "manual_nif_fp_query_gemv_columnar", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
+    {"nif_fp_query_gemv_columnar", 4, "manual_nif_fp_query_gemv_columnar", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_query_gemv_columnar_batch", 5, "manual_nif_fp_query_gemv_columnar_batch", 0},
     {"fp_query_gemv_f32_batch", 4, "manual_nif_fp_query_gemv_f32_batch", "ERL_NIF_DIRTY_JOB_CPU_BOUND"},
     {"fp_vector_sum_f32", 3, "manual_nif_fp_vector_sum_f32", 0},
@@ -438,7 +438,14 @@ dim: dimension
 
 Returns: scores binary (count*8 bytes)
 \"\"\"
-def fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
+def fp_query_gemv_columnar(columns_tuple, query_bin, count, dim) do
+  if dim > 100_000, do: raise ArgumentError, "Dimension too large"
+  if tuple_size(columns_tuple) != dim, do: raise ArgumentError, "Columns tuple size must match dim"
+  if byte_size(query_bin) != dim * 8, do: raise ArgumentError, "Query binary size must be dim * 8"
+  nif_fp_query_gemv_columnar(columns_tuple, query_bin, count, dim)
+end
+
+def nif_fp_query_gemv_columnar(_columns_tuple, _query_bin, _count, _dim), do: :erlang.nif_error(:nif_not_loaded)
 
 @doc \"\"\"
 Indexed columnar GEMV for IVF search.

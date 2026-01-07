@@ -157,15 +157,18 @@ defmodule MerkleDb.Query do
 
   defp do_sparse(tree, sparse_query, k, threshold) do
     # 1. Prepare query
+    Logger.debug("Sparse: preparing query...")
     q = to_sparse_struct(sparse_query)
     tombstones = tree.tombstones || MapSet.new()
 
     # 2. Linear scan (optimized via NIF)
     # Note: For production, an inverted index for sparse vectors would be better.
+    Logger.debug("Sparse: starting linear scan of #{map_size(tree.sparse_vectors)} vectors...")
     results = 
       tree.sparse_vectors
       |> Enum.reject(fn {idx, _vec} -> MapSet.member?(tombstones, idx) end)
       |> Enum.map(fn {idx, vec} ->
+        # Logger.debug("Sparse: dotp for idx #{idx}")
         score = ASM.fp_sparse_dotp(q.indices, q.values, vec.indices, vec.values)
         {idx, score}
       end)
@@ -174,28 +177,32 @@ defmodule MerkleDb.Query do
       |> Enum.take(k)
       |> Enum.map(fn {idx, score} -> {Map.get(tree.keys, idx), score} end)
     
+    Logger.debug("Sparse: scan done, results: #{length(results)}")
     results
   end
 
   defp do_hybrid(tree, query_vec, sparse_query, k, _threshold, opts) do
     # 1. Get dense and sparse results (oversample for better fusion)
     # We take k*2 to have enough overlap for RRF
+    Logger.debug("Hybrid: starting dense KNN...")
     dense_results = do_knn(tree, query_vec, k * 2, 0.0, opts)
+    Logger.debug("Hybrid: starting sparse search...")
     sparse_results = do_sparse(tree, sparse_query, k * 2, 0.0)
     
     # 2. Combine results using Reciprocal Rank Fusion (RRF)
     # score = sum(1 / (k_rrf + rank))
     rrf_k = Keyword.get(opts, :rrf_k, 60)
     
+    Logger.debug("Hybrid: merging results...")
     merged_results = rrf_merge(dense_results, sparse_results, rrf_k)
     
     # 3. Filter by threshold and take top K
-    # Note: RRF scores are in [0, 1] range, different from cosine similarity.
-    # If a threshold was provided, we might need to normalize or just apply it to raw scores
-    # but usually RRF is treated as a new ranking signal.
-    merged_results
+    results = merged_results
     |> Enum.sort_by(fn {_key, score} -> score end, :desc)
     |> Enum.take(k)
+    
+    Logger.debug("Hybrid: done, results: #{length(results)}")
+    results
   end
 
   defp rrf_merge(dense, sparse, k_rrf) do

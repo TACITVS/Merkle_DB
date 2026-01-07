@@ -2046,7 +2046,7 @@ static ErlNifFunc generated_nif_funcs[] = {
     {"fp_job_status", 1, nif_fp_job_status, 0},
     {"fp_job_result", 1, nif_fp_job_result, 0},
     {"fp_job_cancel", 1, nif_fp_job_cancel, 0},
-    {"fp_query_gemv_columnar", 4, manual_nif_fp_query_gemv_columnar, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"nif_fp_query_gemv_columnar", 4, manual_nif_fp_query_gemv_columnar, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_query_gemv_columnar_batch", 5, manual_nif_fp_query_gemv_columnar_batch, 0},
     {"fp_query_gemv_f32_batch", 4, manual_nif_fp_query_gemv_f32_batch, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"fp_vector_sum_f32", 3, manual_nif_fp_vector_sum_f32, 0},

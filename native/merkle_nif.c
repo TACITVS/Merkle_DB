@@ -108,6 +108,15 @@ static ERL_NIF_TERM manual_nif_fp_query_gemv_columnar(ErlNifEnv* env, int argc, 
         return enif_make_badarg(env);
     }
 
+    for (size_t d = 0; d < dim; d++) {
+        if (!enif_inspect_binary(env, tuple_elements[d], &col_bins[d]) || col_bins[d].size != count * 8) {
+            free(columns);
+            free(col_bins);
+            return enif_make_badarg(env);
+        }
+        columns[d] = (const double*)col_bins[d].data;
+    }
+
     ErlNifBinary scores_bin;
     if (!enif_alloc_binary(count * 8, &scores_bin)) {
         free(columns);

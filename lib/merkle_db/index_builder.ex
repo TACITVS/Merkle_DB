@@ -40,7 +40,7 @@ defmodule MerkleDb.IndexBuilder do
       # Calculate k = sqrt(N)
       k = max(10, trunc(:math.sqrt(count)))
       
-      Task.start(fn -> 
+      Task.Supervisor.start_child(MerkleDb.TaskSupervisor, fn -> 
         start_build(k, min_vectors: 1000, collection: collection) 
       end)
       

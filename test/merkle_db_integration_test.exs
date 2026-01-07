@@ -10,11 +10,26 @@ defmodule MerkleDb.IntegrationTest do
   setup do
     collection = "test_#{:erlang.unique_integer([:positive])}"
     :ok = KV.create_collection(collection)
+    
+    # Wait for collection to be visible
+    wait_for_collection(collection, 10)
+
     on_exit(fn -> 
       KV.drop_collection(collection) 
     end)
     {:ok, collection: collection}
   end
+
+  defp wait_for_collection(name, attempts) when attempts > 0 do
+    # Actually try to fetch it via snapshot to be 100% sure state machine applied it
+    case KV.snapshot(name) do
+      %MerkleDb.Tree{} -> :ok
+      _ ->
+        Process.sleep(500)
+        wait_for_collection(name, attempts - 1)
+    end
+  end
+  defp wait_for_collection(_, _), do: :timeout
 
   describe "Core Operations" do
     test "basic insert and knn search", %{collection: coll} do
@@ -104,7 +119,7 @@ defmodule MerkleDb.IntegrationTest do
       tree = KV.snapshot(coll)
       
       # Build HNSW
-      tree_hnsw = Tree.build_hnsw(tree, m: 16, ef_construction: 64)
+      tree_hnsw = Tree.build_hnsw(tree, m: 32, ef_construction: 128)
       assert tree_hnsw.hnsw != nil
 
       # Update KV with the HNSW tree

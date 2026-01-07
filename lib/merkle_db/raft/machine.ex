@@ -6,6 +6,7 @@ defmodule MerkleDb.Raft.Machine do
   @behaviour :ra_machine
 
   alias MerkleDb.Tree
+  require Logger
 
   @impl :ra_machine
   def init(_conf) do
@@ -83,6 +84,12 @@ defmodule MerkleDb.Raft.Machine do
       {:drop_collection, name} ->
         {Map.delete(collections, name), :ok}
 
+      {:get_snapshot, name} ->
+        {collections, Map.get(collections, name)}
+
+      {:get_state, _} ->
+        {collections, collections}
+
       _ ->
         {collections, {:error, :unknown_command}}
     end
@@ -94,15 +101,6 @@ defmodule MerkleDb.Raft.Machine do
       nil -> {:error, :collection_not_found}
       tree -> {:ok, tree}
     end
-  end
-
-  # State snapshots for Raft log truncation
-  @impl :ra_machine
-  def state_enter(_role, state) do
-    # When entering a role (or specifically during periodic snapshotting),
-    # we return side-effects. Returning a {:snapshot, state} side-effect
-    # tells Ra to truncate the log and save this state as a snapshot.
-    [{:snapshot, state}]
   end
 
   @impl :ra_machine
