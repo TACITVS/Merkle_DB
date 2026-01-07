@@ -69,4 +69,22 @@ If everything is correct, you should see the MerkleDb banner:
 ╚════════════════════════════════════════════════════════════╝
 ```
 
+## 5. (Optional) Python SDK Setup
+
+If you prefer interacting with MerkleDb via Python, you can use our included SDK.
+
+```bash
+# Assuming you have Python 3.x installed
+cd sdk/python
+# You can copy merkledb.py to your project or install requirements if we had a package
+# For now, just import merkledb.py in your script.
+```
+
+Example `usage.py`:
+```python
+from sdk.python.merkledb import MerkleDb
+db = MerkleDb("http://localhost:4000")
+print(db.list_collections())
+```
+
 **Congratulations!** You have successfully built MerkleDb. In the next module, we will explore core operations.

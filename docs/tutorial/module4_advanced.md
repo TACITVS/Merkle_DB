@@ -39,9 +39,14 @@ One of MerkleDb's most powerful features is searching over entire books.
 Instead of chunking by fixed size, MerkleDb supports sliding windows to preserve context.
 
 ```elixir
-# Embed a 10MB text file using a sliding window
-path = "my_book.txt"
-Ingestor.ingest_file(path, collection: "my_book", window_size: 500, overlap: 100)
+# Chunk a text file
+chunks = MerkleDb.Ingestor.chunk_file("my_book.txt", 500, 100)
+
+# Embed and insert each chunk
+Enum.with_index(chunks) |> Enum.each(fn {chunk, idx} ->
+  vec = MerkleDb.TextEmbedding.embed(chunk)
+  MerkleDb.KV.put("my_book", "chunk_#{idx}", vec, %{"text" => chunk})
+end)
 ```
 
 ### Hierarchical Search

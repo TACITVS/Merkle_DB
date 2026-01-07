@@ -21,18 +21,22 @@ At the core of MerkleDb is a library written in **64-bit Assembly**, utilizing *
 ### 2. Fault-Tolerant & Distributed (Raft)
 MerkleDb is built for high availability. By integrating the **Raft consensus algorithm**, we ensure that your data is replicated and consistent across a cluster of nodes.
 - **Strong Consistency**: Every write is committed to a quorum before being acknowledged.
+- **Linearizable Reads**: Guaranteed to see the latest writes.
 - **Automatic Leader Election**: If a node fails, the cluster automatically elects a new leader in milliseconds.
 - **Self-Healing**: Nodes automatically catch up with the log after downtime.
 
 ### 3. Zero-Copy Architecture
 Our **V7 Bridge Generator** eliminates NIF performance pitfalls:
-- **Direct Binary Access**: Elixir binaries are mapped directly to C/Assembly pointers.
+- **Direct Binary Access**: Elixir binaries are mapped directly to C/Assembly pointers without copying.
 - **Zero Memory Bloat**: Output buffers are pre-allocated, allowing the hardware to write results directly into BEAM-managed memory.
+- **Dirty Scheduler Support**: Heavy jobs (HNSW build, training) are offloaded to dirty schedulers to keep the VM responsive.
 
 ### 4. Advanced Semantic Intelligence
 - **Sliding Window Ingestion**: Context-aware chunking for long-form text.
 - **Hybrid Search**: Combine vector similarity with metadata filtering.
 - **Hierarchical Summarization**: Aggregate passage vectors into chapter and book-level "Topic Vectors."
+- **HNSW Indexing**: Approximate Nearest Neighbor search for massive datasets.
+- **Int8 Quantization**: 4x memory reduction with minimal accuracy loss.
 
 ---
 
@@ -58,7 +62,7 @@ We believe in making powerful tools accessible. Follow this course to master Mer
 
 ### Prerequisites
 - **Elixir ~> 1.14**
-- **GCC (MinGW64 on Windows)**
+- **GCC (MinGW64 on Windows or standard GCC on Linux/Mac)**
 - **NASM (Netwide Assembler)**
 - **Make**
 
@@ -73,7 +77,7 @@ mix compile
 
 ---
 
-## 📖 API at a Glance
+## 📖 API at a Glance (Elixir)
 
 ```elixir
 alias MerkleDb.KV
@@ -86,6 +90,28 @@ KV.put("products", "id_1", vector_data, %{category: "electronics"})
 
 # Perform AVX2-accelerated search
 results = MerkleDb.Query.execute(KV.snapshot("products"), [:knn, query_vec, 10, 0.8])
+```
+
+## 🐍 Python SDK
+
+MerkleDb includes a comprehensive Python SDK for easy integration with your AI pipelines (PyTorch, TensorFlow, etc.).
+
+```python
+from sdk.python.merkledb import MerkleDb
+import numpy as np
+
+db = MerkleDb("http://localhost:4000")
+
+# Create collection
+db.create_collection("embeddings", dim=768)
+
+# Insert vectors (list or numpy)
+vectors = [{"id": "vec1", "vector": np.random.rand(768), "metadata": {"tag": "A"}}]
+db.insert("embeddings", vectors)
+
+# Search
+results = db.search("embeddings", vector=query_vec, k=5)
+print(results)
 ```
 
 ---
