@@ -3,80 +3,58 @@
 [![Performance: AVX2](https://img.shields.io/badge/Performance-AVX2%20%2F%20SIMD-orange)](https://github.com/TACITVS/Merkle_DB)
 [![Bridge: Zero--Copy NIF](https://img.shields.io/badge/Bridge-Zero--Copy%20NIF-blue)](https://github.com/TACITVS/Merkle_DB)
 [![Platform: Elixir](https://img.shields.io/badge/Platform-Elixir%20%2F%20Erlang-purple)](https://elixir-lang.org/)
+[![Consensus: Raft](https://img.shields.io/badge/Consensus-Raft-red)](https://github.com/rabbitmq/ra)
 
-**MerkleDb** is a cutting-edge, generic vector database engineered for extreme performance and scalability. It seamlessly bridges the high-level concurrency of **Elixir/BEAM** with the raw power of **x86-64 Assembly (AVX2)** via a highly optimized, zero-copy NIF interface.
+**MerkleDb** is a cutting-edge, fault-tolerant vector database engineered for extreme performance and absolute data consistency. It seamlessly bridges the high-level concurrency and distribution of **Elixir/OTP** with the raw power of **x86-64 Assembly (AVX2)**.
 
-Designed for research, AI, and large-scale data analysis, MerkleDb is not just a storage engine—it's a comprehensive analytics platform capable of processing millions of vectors with microsecond latency.
+Designed for production AI workloads, MerkleDb is a distributed analytics platform capable of processing millions of vectors with microsecond latency, guaranteed by the **Raft consensus algorithm**.
 
 ---
 
-## 🚀 Why MerkleDb?
-
-In the era of AI, vector search is often the bottleneck. MerkleDb solves this by moving heavy computations to the hardware level while maintaining a safe, developer-friendly Elixir API.
+## 🚀 Key Features
 
 ### 1. Hardcore SIMD Performance
-At the core of MerkleDb is the `FP_ASM_LIB_DEV` library. Written primarily in **64-bit Assembly**, it utilizes **AVX2 (Advanced Vector Extensions)** to perform 256-bit SIMD operations. 
-- **Dot Products, AXPY, and Norms** are processed in parallel across multiple elements per CPU cycle.
-- **24x Speedup** over native Elixir implementations for large-scale reductions.
-- **1.3 GB/s+ Throughput** sustained for vector transformations.
+At the core of MerkleDb is a library written in **64-bit Assembly**, utilizing **AVX2 (Advanced Vector Extensions)** to perform 256-bit SIMD operations. 
+- **Microsecond Latency**: Brute-force and indexed searches optimized at the transistor level.
+- **24x Speedup**: Massive performance gains over native implementations for vector reductions.
 
-### 2. Zero-Copy Architecture (V7 Bridge)
-Our custom-built **V7 Bridge Generator** eliminates the common performance pitfalls of NIFs:
-- **Direct Binary Access**: No more redundant `memcpy` for inputs. We map Elixir binaries directly to C pointers.
-- **Up-front Allocation**: Output buffers are pre-allocated as Erlang binaries and passed to Assembly, allowing the hardware to write results directly into memory managed by the BEAM.
-- **Minimal Overhead**: NIF call latency is minimized, ensuring that even short-lived operations remain efficient.
+### 2. Fault-Tolerant & Distributed (Raft)
+MerkleDb is built for high availability. By integrating the **Raft consensus algorithm**, we ensure that your data is replicated and consistent across a cluster of nodes.
+- **Strong Consistency**: Every write is committed to a quorum before being acknowledged.
+- **Automatic Leader Election**: If a node fails, the cluster automatically elects a new leader in milliseconds.
+- **Self-Healing**: Nodes automatically catch up with the log after downtime.
 
-### 3. Advanced Inverted File Index (IVF)
-MerkleDb doesn't just do brute-force search. It includes a built-in **IVF Indexing** system powered by **K-Means Clustering**:
-- **Voronoi Partitioning**: Data is automatically clustered around centroids.
-- **6x+ Search Speedup**: Queries focus only on the most relevant clusters, drastically reducing the search space without sacrificing accuracy.
-- **Dynamic Re-indexing**: Easily rebuild indices as your dataset grows.
+### 3. Zero-Copy Architecture
+Our **V7 Bridge Generator** eliminates NIF performance pitfalls:
+- **Direct Binary Access**: Elixir binaries are mapped directly to C/Assembly pointers.
+- **Zero Memory Bloat**: Output buffers are pre-allocated, allowing the hardware to write results directly into BEAM-managed memory.
 
-### 4. Comprehensive Analytics Suite
-Access over **180 specialized functions** for data science directly from Elixir:
-- **Clustering**: High-speed K-Means.
-- **Dimensionality Reduction**: Principal Component Analysis (PCA).
-- **Statistics**: Mean, Variance, Moments, Correlation, and more across massive datasets.
-- **ML Primitives**: Ready-to-use kernels for building custom neural networks or models.
-
-### 5. Advanced Semantic Intelligence (Whole Book Search)
-MerkleDb is uniquely optimized for processing and searching entire books through a multi-level semantic pipeline:
-- **Sliding Window Ingestion**: Context-aware chunking that preserves semantic meaning across passage boundaries.
-- **Native f32 Storage**: Optimized for high-dimensional embeddings (BERT, GloVe), providing a **50% reduction in RAM usage** and significantly higher CPU cache hit rates.
-- **Hierarchical Topic Summarization**: Automated aggregation of passage vectors into Chapter and Book-level "Topic Vectors," enabling multi-level "Zoom-In" search.
-- **Universal Cross-Lingual Retrieval**: Concept-based searching that retrieves relevant passages regardless of the source language (e.g., search in English, find in Portuguese).
+### 4. Advanced Semantic Intelligence
+- **Sliding Window Ingestion**: Context-aware chunking for long-form text.
+- **Hybrid Search**: Combine vector similarity with metadata filtering.
+- **Hierarchical Summarization**: Aggregate passage vectors into chapter and book-level "Topic Vectors."
 
 ---
 
-## ⚖️ Design Philosophy: Performance vs. Reliability
+## 📚 Developer Course: From Zero to Distributed Cluster
 
-A common question is: *Why implement a vector database in Elixir instead of pure C or Assembly?*
+We believe in making powerful tools accessible. Follow this course to master MerkleDb.
 
-While a pure C/ASM implementation would undoubtedly be faster for raw mathematical throughput, it lacks the architectural safety nets required for a production-grade database. MerkleDb adopts a **Hybrid Strategy** that provides the best of both worlds:
+### [Module 1: Getting Started](docs/tutorial/module1_setup.md)
+*Clone the repo, install dependencies, and run your first local instance.*
 
-### The Elixir Control Plane (Reliability & Uptime)
-We leverage Elixir and the BEAM virtual machine for everything that requires **absurdly high reliability and fault tolerance**.
-- **Isolation**: Every operation runs in its own process. If a query crashes, it doesn't take down the database.
-- **Supervision**: The database state is protected by OTP supervision trees, ensuring self-healing and guaranteed uptime.
-- **Distribution**: Built-in support for clustering and transparent replication across nodes.
-- **Concurrency**: The Erlang scheduler handles millions of lightweight processes, allowing MerkleDb to manage thousands of concurrent searches without the thread-safety nightmares of pure C.
+### [Module 2: Core Vector Operations](docs/tutorial/module2_basics.md)
+*Learn the KV API: Creating collections, inserting vectors, and performing KNN searches.*
 
-### The C/ASM Data Plane (Raw Metal Speed)
-We offload only the "hot" loops—the computationally expensive vector math—to **AVX2-optimized Assembly**. This ensures that the actual search performance is identical to the fastest compiled engines, while the management of that data remains within a safe, functional environment.
+### [Module 3: Going Distributed with Raft](docs/tutorial/module3_clustering.md)
+*Spin up a 3-node cluster and witness fault tolerance in action.*
 
-By choosing this path, MerkleDb avoids the fragility of pure C databases (buffer overflows, memory leaks, segmentation faults) while maintaining the microsecond-level latency of hardware-accelerated math.
+### [Module 4: Advanced Search & Analytics](docs/tutorial/module4_advanced.md)
+*IVF Indexing, Quantization, and Semantic Search over whole books.*
 
 ---
 
-## 🛠️ Architecture
-
-- **Core Storage**: Columnar storage layout optimized for cache-friendly AXPY batch processing.
-- **Data Integrity**: Based on **Merkle Trees and DAGs**, ensuring that every state of your database is verifiable and cryptographically sound.
-- **Concurrency**: Leverages the Erlang Scheduler for non-blocking I/O, while the CPU-heavy tasks are offloaded to optimized native kernels.
-
----
-
-## 📦 Installation & Usage
+## 🛠️ Installation
 
 ### Prerequisites
 - **Elixir ~> 1.14**
@@ -84,42 +62,38 @@ By choosing this path, MerkleDb avoids the fragility of pure C databases (buffer
 - **NASM (Netwide Assembler)**
 - **Make**
 
-### Quick Start
+### Build
 ```powershell
+git clone https://github.com/TACITVS/Merkle_DB.git
+cd Merkle_DB
 mix deps.get
 mix run gen_bridge.exs
 mix compile
 ```
 
-### Semantic Search Example
+---
+
+## 📖 API at a Glance
+
 ```elixir
-alias MerkleDb.{KV, Query, Ingestor}
+alias MerkleDb.KV
 
-# 1. Ingest a book with sliding window (300-dim f32)
-KV.create_collection("library", dim: 300, precision: :f32)
-chunks = Ingestor.chunk_file("philosophy_book.txt", 200, 50)
-KV.put_batch("library", Enum.map(chunks, fn c -> {UUID.uuid4(), MerkleDb.TextEmbedding.embed(c), %{text: c}} end))
+# Create a strongly consistent collection
+KV.create_collection("products", dim: 128, precision: :f32)
 
-# 2. Perform automated semantic search
-# No manual vectorization needed - MerkleDb handles it via GloVe/AVX2
-results = Query.execute(KV.snapshot("library"), [:semantic, "What is the meaning of life?", 5, 0.7])
+# Insert data via Raft Quorum
+KV.put("products", "id_1", vector_data, %{category: "electronics"})
 
-# Returns passages across any language mapped in the vector space
+# Perform AVX2-accelerated search
+results = MerkleDb.Query.execute(KV.snapshot("products"), [:knn, query_vec, 10, 0.8])
 ```
 
 ---
 
-## 🧪 Applications
+## ⚖️ Design Philosophy
 
-- **AI Search Engines**: Real-time semantic search using embeddings.
-- **Bioinformatics**: Analyzing genomic sequences represented as high-dimensional vectors.
-- **Financial Research**: Real-time correlation analysis and anomaly detection in time-series data.
-- **Geographic Information Systems (GIS)**: Fast spatial indexing and nearest-neighbor lookups.
-
----
-
-## 📜 Research Foundation
-
-MerkleDb is built with a commitment to both performance and honesty about the underlying data. Whether you are building a production-grade search engine or conducting academic research, the combination of **Assembly-level speed** and **Functional Programming safety** provides a unique and powerful toolset.
+MerkleDb adopts a **Hybrid Strategy**:
+- **Elixir Control Plane**: Manages distribution, consensus (Raft), and fault recovery.
+- **C/ASM Data Plane**: Handles the "hot" loops—the expensive vector math—using hardware-level optimizations.
 
 Developed by **TACITVS**.
