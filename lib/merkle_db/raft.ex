@@ -24,11 +24,14 @@ defmodule MerkleDb.Raft do
     # Set data_dir to the server-specific directory
     Application.put_env(:ra, :data_dir, String.to_charlist(server_dir))
     
-    # Tuning for faster elections in local dev/tests
-    # Increased for stability on older hardware
-    Application.put_env(:ra, :election_timeout_min, 1000)
-    Application.put_env(:ra, :election_timeout_max, 2000)
-    Application.put_env(:ra, :heartbeat_interval, 200)
+    # Raft timing configuration (configurable via config)
+    election_min = Application.get_env(:merkle_db, :raft_election_timeout_min, 1000)
+    election_max = Application.get_env(:merkle_db, :raft_election_timeout_max, 2000)
+    heartbeat = Application.get_env(:merkle_db, :raft_heartbeat_interval, 200)
+
+    Application.put_env(:ra, :election_timeout_min, election_min)
+    Application.put_env(:ra, :election_timeout_max, election_max)
+    Application.put_env(:ra, :heartbeat_interval, heartbeat)
 
     # Explicitly start ra system (required by newer versions)
     # Use a case to handle already_started if it happens

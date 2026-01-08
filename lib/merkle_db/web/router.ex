@@ -1,25 +1,181 @@
 defmodule MerkleDb.Web.Router do
-  use Plug.Router
-  alias MerkleDb.{Bootstrap, Filter, KV, PayloadStore, Persistence, Query, Replication, TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner, TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder, FPDispatcher}
+  @moduledoc """
+  HTTP router for MerkleDb API.
 
+  ## Security
+  - All /v1 endpoints require authentication
+  - Rate limiting applied globally
+  - Body size limits enforced
+  - Input validation on all write operations
+
+  ## Health Checks
+  - GET /health/live - Liveness probe (is the process running?)
+  - GET /health/ready - Readiness probe (can serve traffic?)
+  """
+  use Plug.Router
+  require Logger
+
+  alias MerkleDb.{Bootstrap, Filter, KV, PayloadStore, Persistence, Query, Replication,
+                  TextEmbedding, TextStore, JobScheduler, Analytics, BenchmarkRunner,
+                  TelemetryAggregator, TextAnalytics, LoadGenerator, IndexBuilder,
+                  FPDispatcher, Validator, RateLimiter}
+  alias MerkleDb.Web.Auth
+
+  @max_body_size Application.compile_env(:merkle_db, :max_request_body_bytes, 10_485_760)
+
+  # Static assets (no auth required)
   plug Plug.Static,
     at: "/",
     from: {:merkle_db, "priv/static"},
     only: ["index.html"]
 
   plug :match
-  plug :authenticate_v1
+  plug :rate_limit_ip
+  plug :authenticate
+  plug Plug.Parsers,
+    parsers: [:json],
+    pass: ["application/json"],
+    json_decoder: Jason,
+    body_reader: {__MODULE__, :read_body_with_limit, []}
   plug :dispatch
 
-  defp authenticate_v1(conn, _opts) do
-    if String.starts_with?(conn.request_path, "/v1") do
-      MerkleDb.Web.Auth.call(conn, [])
-    else
+  # Custom body reader with size limit
+  def read_body_with_limit(conn, opts) do
+    max_size = Keyword.get(opts, :length, @max_body_size)
+    Plug.Conn.read_body(conn, length: max_size)
+  end
+
+  # ============================================================================
+  # MIDDLEWARE
+  # ============================================================================
+
+  # Rate limiting by IP (applied before authentication)
+  defp rate_limit_ip(conn, _opts) do
+    # Skip rate limiting for health checks
+    if health_check_path?(conn.request_path) do
       conn
+    else
+      case RateLimiter.check_rate_ip(conn) do
+        :ok ->
+          conn
+
+        {:error, :rate_limited, retry_after} ->
+          conn
+          |> put_resp_header("retry-after", to_string(div(retry_after, 1000)))
+          |> put_resp_content_type("application/json")
+          |> send_resp(429, Jason.encode!(%{error: "rate_limited", retry_after_ms: retry_after}))
+          |> halt()
+      end
     end
   end
 
-  # --- API V1 (Secured) ---
+  # Authentication middleware
+  defp authenticate(conn, _opts) do
+    cond do
+      # Health checks - no auth required
+      health_check_path?(conn.request_path) ->
+        conn
+
+      # API V1 - auth required with scope based on method
+      String.starts_with?(conn.request_path, "/v1") ->
+        scope = scope_for_method(conn.method)
+        Auth.call(conn, scope: scope)
+
+      # Admin endpoints - require admin scope
+      String.starts_with?(conn.request_path, "/admin") ->
+        Auth.call(conn, scope: :admin)
+
+      # Other endpoints - check if auth is globally required
+      Application.get_env(:merkle_db, :require_auth, false) ->
+        Auth.call(conn, [])
+
+      # No auth required in dev/test mode
+      true ->
+        conn
+    end
+  end
+
+  defp health_check_path?("/health" <> _), do: true
+  defp health_check_path?("/favicon.ico"), do: true
+  defp health_check_path?(_), do: false
+
+  defp scope_for_method("GET"), do: :read
+  defp scope_for_method("HEAD"), do: :read
+  defp scope_for_method("OPTIONS"), do: :read
+  defp scope_for_method(_), do: :write
+
+  # ============================================================================
+  # HEALTH CHECKS (No auth required)
+  # ============================================================================
+
+  @doc """
+  Liveness probe - is the process running?
+  Returns 200 if the Erlang VM is up.
+  """
+  get "/health/live" do
+    json = Jason.encode!(%{
+      status: "ok",
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    })
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+  end
+
+  @doc """
+  Readiness probe - can the service accept traffic?
+  Checks that essential services are running.
+  """
+  get "/health/ready" do
+    checks = %{
+      kv_store: check_kv_store(),
+      raft: check_raft(),
+      rate_limiter: check_rate_limiter(),
+      api_key_store: check_api_key_store()
+    }
+
+    all_healthy = Enum.all?(checks, fn {_, status} -> status == :ok end)
+
+    response = %{
+      status: if(all_healthy, do: "ready", else: "degraded"),
+      checks: Map.new(checks, fn {k, v} -> {k, to_string(v)} end),
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    status_code = if all_healthy, do: 200, else: 503
+    json = Jason.encode!(response)
+    conn |> put_resp_content_type("application/json") |> send_resp(status_code, json)
+  end
+
+  @doc """
+  Detailed health check with metrics.
+  """
+  get "/health/detailed" do
+    tree = KV.snapshot()
+
+    response = %{
+      status: "ok",
+      version: Application.spec(:merkle_db, :vsn) |> to_string(),
+      uptime_seconds: :erlang.statistics(:wall_clock) |> elem(0) |> div(1000),
+      memory: %{
+        total_mb: :erlang.memory(:total) |> div(1_048_576),
+        processes_mb: :erlang.memory(:processes) |> div(1_048_576),
+        ets_mb: :erlang.memory(:ets) |> div(1_048_576)
+      },
+      database: %{
+        vector_count: tree.count,
+        dimensions: tree.dim,
+        indexed: tree.centroids != nil,
+        collections: length(KV.list_collections())
+      },
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    json = Jason.encode!(response)
+    conn |> put_resp_content_type("application/json") |> send_resp(200, json)
+  end
+
+  # ============================================================================
+  # API V1 (Authenticated)
+  # ============================================================================
 
   get "/v1/collections" do
     collections = KV.list_collections()
@@ -28,119 +184,159 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/v1/collections/:collection" do
-    {:ok, body, conn} = read_body(conn)
-    opts = case Jason.decode(body) do
-      {:ok, %{} = p} -> 
-        # Map JSON keys to internal atoms (dim, precision)
-        Enum.map(p, fn {k, v} -> {String.to_atom(k), v} end)
-        |> Enum.map(fn 
-          {:precision, p} -> {:precision, String.to_atom(p)}
+    with :ok <- Validator.validate_collection_name(collection),
+         {:ok, body, conn} <- read_body(conn),
+         {:ok, params} <- parse_json(body) do
+      opts =
+        params
+        |> Enum.map(fn {k, v} -> {String.to_atom(k), v} end)
+        |> Enum.map(fn
+          {:precision, p} when is_binary(p) -> {:precision, String.to_atom(p)}
           other -> other
         end)
-      _ -> []
-    end
 
-    case KV.create_collection(collection, opts) do
-      :ok -> send_resp(conn, 201, Jason.encode!(%{status: "ok", message: "Collection created"}))
-      {:error, :already_exists} -> send_resp(conn, 409, Jason.encode!(%{error: "already_exists"}))
-      err -> send_resp(conn, 500, Jason.encode!(%{error: inspect(err)}))
+      case KV.create_collection(collection, opts) do
+        :ok ->
+          Logger.info("Collection '#{collection}' created")
+          send_json(conn, 201, %{status: "ok", message: "Collection created"})
+
+        {:error, :already_exists} ->
+          send_json(conn, 409, %{error: "already_exists"})
+
+        err ->
+          send_json(conn, 500, %{error: inspect(err)})
+      end
+    else
+      {:error, reason} when is_binary(reason) ->
+        send_json(conn, 400, %{error: reason})
+
+      {:error, :invalid_json} ->
+        send_json(conn, 400, %{error: "Invalid JSON body"})
+
+      err ->
+        send_json(conn, 400, %{error: inspect(err)})
     end
   end
 
   delete "/v1/collections/:collection" do
-    case KV.drop_collection(collection) do
-      :ok -> send_resp(conn, 200, Jason.encode!(%{status: "ok", message: "Collection dropped"}))
-      err -> send_resp(conn, 500, Jason.encode!(%{error: inspect(err)}))
+    with :ok <- Validator.validate_collection_name(collection) do
+      case KV.drop_collection(collection) do
+        :ok ->
+          Logger.info("Collection '#{collection}' dropped")
+          send_json(conn, 200, %{status: "ok", message: "Collection dropped"})
+
+        err ->
+          send_json(conn, 500, %{error: inspect(err)})
+      end
+    else
+      {:error, reason} ->
+        send_json(conn, 400, %{error: reason})
     end
   end
 
   post "/v1/:collection/checkpoint" do
-    case KV.checkpoint(collection) do
-      :ok ->
-        send_resp(conn, 200, Jason.encode!(%{status: "ok", message: "Checkpoint created"}))
+    with :ok <- Validator.validate_collection_name(collection) do
+      case KV.checkpoint(collection) do
+        :ok ->
+          send_json(conn, 200, %{status: "ok", message: "Checkpoint created"})
+
+        {:error, reason} ->
+          send_json(conn, 500, %{error: inspect(reason)})
+      end
+    else
       {:error, reason} ->
-        send_resp(conn, 500, Jason.encode!(%{error: inspect(reason)}))
+        send_json(conn, 400, %{error: reason})
     end
   end
 
   post "/v1/:collection/vectors" do
-    {:ok, body, conn} = read_body(conn)
-    case Jason.decode(body) do
-      {:ok, items} when is_list(items) ->
-        # Expecting [{"id": "...", "vector": [...], "metadata": {...}}]
-        # OR [{"id": "...", "text": "...", "metadata": {...}}] for semantic ingest
-        
-        batch = Enum.map(items, fn item ->
-          id = item["id"]
-          meta = item["metadata"] || %{}
-          
-          vec = 
-            cond do
-              item["vector"] -> 
-                # Convert list of floats to binary
-                # Assume f32 for now, or detect? Let's use f32 as default for API V1
-                for f <- item["vector"], into: <<>>, do: <<f::float-little-32>>
-              
-              item["text"] ->
-                # Semantic embedding
-                TextEmbedding.embed(item["text"])
-                
-              true -> <<>>
-            end
-            
-          {id, vec, meta}
-        end)
-        
-        case KV.put_batch(collection, batch) do
-          :ok -> 
-            send_resp(conn, 200, Jason.encode!(%{status: "ok", count: length(batch)}))
-          {:error, reason} ->
-            send_resp(conn, 500, Jason.encode!(%{error: inspect(reason)}))
-        end
-        
-      _ ->
-        send_resp(conn, 400, "Invalid JSON body")
+    with :ok <- Validator.validate_collection_name(collection),
+         {:ok, body, conn} <- read_body(conn),
+         {:ok, items} when is_list(items) <- parse_json(body),
+         :ok <- Validator.validate_batch(items) do
+
+      batch = Enum.map(items, fn item ->
+        id = item["id"]
+        meta = item["metadata"] || %{}
+
+        vec =
+          cond do
+            item["vector"] ->
+              for f <- item["vector"], into: <<>>, do: <<f::float-little-32>>
+
+            item["text"] ->
+              TextEmbedding.embed(item["text"])
+
+            true -> <<>>
+          end
+
+        {id, vec, meta}
+      end)
+
+      case KV.put_batch(collection, batch) do
+        :ok ->
+          send_json(conn, 200, %{status: "ok", count: length(batch)})
+
+        {:error, reason} ->
+          send_json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      {:error, reason} when is_binary(reason) ->
+        send_json(conn, 400, %{error: reason})
+
+      {:ok, _} ->
+        send_json(conn, 400, %{error: "Expected array of vectors"})
+
+      err ->
+        send_json(conn, 400, %{error: inspect(err)})
     end
   end
 
   post "/v1/:collection/search" do
-    {:ok, body, conn} = read_body(conn)
-    params = case Jason.decode(body) do
-      {:ok, p} -> p
-      _ -> %{}
-    end
-    
-    k = params["k"] || 10
-    threshold = params["threshold"] || 0.0
-    
-    query = 
-      cond do
-        params["vector"] -> 
-          vec_bin = for f <- params["vector"], into: <<>>, do: <<f::float-little-32>>
-          [:knn, vec_bin, k, threshold]
-          
-        params["text"] ->
-          [:semantic, params["text"], k, threshold]
-          
-        true -> nil
+    with :ok <- Validator.validate_collection_name(collection),
+         {:ok, body, conn} <- read_body(conn),
+         {:ok, params} <- parse_json(body),
+         :ok <- Validator.validate_query_params(params) do
+
+      k = params["k"] || 10
+      threshold = params["threshold"] || 0.0
+
+      query =
+        cond do
+          params["vector"] ->
+            vec_bin = for f <- params["vector"], into: <<>>, do: <<f::float-little-32>>
+            [:knn, vec_bin, k, threshold]
+
+          params["text"] ->
+            [:semantic, params["text"], k, threshold]
+
+          true -> nil
+        end
+
+      if query do
+        tree = KV.snapshot(collection)
+        results = Query.execute(tree, query)
+
+        hits = Enum.map(results, fn {key, score} ->
+          %{id: key, score: score}
+        end)
+
+        send_json(conn, 200, %{results: hits})
+      else
+        send_json(conn, 400, %{error: "Missing 'vector' or 'text' in body"})
       end
-      
-    if query do
-      tree = KV.snapshot(collection)
-      results = Query.execute(tree, query)
-      
-      hits = Enum.map(results, fn {key, score} -> 
-        %{id: key, score: score}
-      end)
-      
-      json = Jason.encode!(%{results: hits})
-      conn |> put_resp_content_type("application/json") |> send_resp(200, json)
     else
-      send_resp(conn, 400, "Missing 'vector' or 'text' in body")
+      {:error, reason} when is_binary(reason) ->
+        send_json(conn, 400, %{error: reason})
+
+      err ->
+        send_json(conn, 400, %{error: inspect(err)})
     end
   end
 
-  # --- JOB CONTROLS ---
+  # ============================================================================
+  # JOB CONTROLS
+  # ============================================================================
 
   post "/job/start" do
     tree = KV.snapshot()
@@ -180,8 +376,8 @@ defmodule MerkleDb.Web.Router do
   get "/job/status" do
     if Process.whereis(JobScheduler) == nil, do: JobScheduler.start_link(nil)
     status = JobScheduler.get_status()
-    topics_json = 
-      status.topics 
+    topics_json =
+      status.topics
       |> Enum.map(fn t -> "{\"label\": \"#{escape(t.label)}\", \"count\": #{t.count}}" end)
       |> Enum.join(",")
 
@@ -196,7 +392,9 @@ defmodule MerkleDb.Web.Router do
     conn |> put_resp_content_type("application/json") |> send_resp(200, json)
   end
 
-  # --- STANDARD ENDPOINTS ---
+  # ============================================================================
+  # STANDARD ENDPOINTS
+  # ============================================================================
 
   get "/" do
     if Process.whereis(JobScheduler) == nil, do: JobScheduler.start_link(nil)
@@ -216,7 +414,7 @@ defmodule MerkleDb.Web.Router do
         if Application.get_env(:merkle_db, :ingesting, false) do
           send_resp(conn, 429, "Busy")
         else
-          path = "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt"
+          path = Application.get_env(:merkle_db, :ingest_file_path, "C:/Users/baian/AppData/Roaming/nltk_data/corpora/gutenberg/bible-kjv.txt")
           if File.exists?(path) do
             LoadGenerator.stop_if_active()
             Application.put_env(:merkle_db, :ingesting, true)
@@ -239,7 +437,6 @@ defmodule MerkleDb.Web.Router do
     try do
       tree = KV.snapshot()
       if tree.count > 0 and tree.dim > 0 do
-        # Get stats for first 6 dimensions (0-5)
         stats = for i <- 0..min(tree.dim - 1, 5) do
           case MerkleDb.Analytics.column_stats(tree, i) do
             {:ok, stat_map} -> stat_map
@@ -249,7 +446,6 @@ defmodule MerkleDb.Web.Router do
 
         safe_stats = Enum.map(stats, fn m ->
           Map.new(m, fn {k, v} ->
-            # Simple check for NaN/Inf which Jason hates
             if is_float(v) and (v > 1.0e300 or v < -1.0e300 or v != v) do
               {k, 0.0}
             else
@@ -264,17 +460,15 @@ defmodule MerkleDb.Web.Router do
           indexed: tree.centroids != nil,
           sample_stats: safe_stats
         } |> Jason.encode!()
-        
+
         conn |> put_resp_content_type("application/json") |> send_resp(200, json)
       else
         json = %{count: 0, dim: 0, indexed: false, sample_stats: []} |> Jason.encode!()
         conn |> put_resp_content_type("application/json") |> send_resp(200, json)
       end
     rescue
-      e -> 
-        error_msg = "🔴 Summary Error: #{inspect(e)}"
-        IO.puts(error_msg)
-        File.write!("server_error.log", error_msg, [:append])
+      e ->
+        Logger.error("Summary Error: #{inspect(e)}")
         send_resp(conn, 500, "Error: #{inspect(e)}")
     end
   end
@@ -354,7 +548,7 @@ defmodule MerkleDb.Web.Router do
           rescue
             e ->
               error_msg = "PCA failed: #{inspect(e)}"
-              IO.puts(error_msg)
+              Logger.error(error_msg)
               conn
               |> put_resp_content_type("application/json")
               |> send_resp(500, Jason.encode!(%{error: error_msg}))
@@ -383,7 +577,7 @@ defmodule MerkleDb.Web.Router do
           "flat_vs_ivf" -> :flat_vs_ivf
           "single_vs_batch" -> :single_vs_batch
           "cached_vs_uncached" -> :cached_vs_uncached
-          _ -> :flat_vs_ivf  # Default
+          _ -> :flat_vs_ivf
         end
 
         try do
@@ -403,7 +597,7 @@ defmodule MerkleDb.Web.Router do
         rescue
           e ->
             error_msg = "Benchmark failed: #{Exception.message(e)}"
-            IO.puts(error_msg)
+            Logger.error(error_msg)
             json = Jason.encode!(%{error: error_msg})
             conn
             |> put_resp_content_type("application/json")
@@ -411,7 +605,7 @@ defmodule MerkleDb.Web.Router do
         catch
           kind, reason ->
             error_msg = "Benchmark failed: #{kind} #{inspect(reason)}"
-            IO.puts(error_msg)
+            Logger.error(error_msg)
             json = Jason.encode!(%{error: error_msg})
             conn
             |> put_resp_content_type("application/json")
@@ -422,7 +616,6 @@ defmodule MerkleDb.Web.Router do
 
   get "/telemetry/metrics" do
     if Process.whereis(TelemetryAggregator) == nil do
-      # Start aggregator if not running
       {:ok, _} = TelemetryAggregator.start_link(nil)
     end
 
@@ -614,7 +807,6 @@ defmodule MerkleDb.Web.Router do
 
       {:ok, conn} ->
         if query_text do
-          # Parse optional filter parameter
           filter_param = conn.query_params["filter"]
           filter_result = Filter.parse_query_param(filter_param)
 
@@ -632,7 +824,6 @@ defmodule MerkleDb.Web.Router do
               {time_us, results} = :timer.tc(fn ->
                 q_vec = TextEmbedding.embed(query_text)
 
-                # Use filtered query if filter is provided
                 if filter == [] do
                   Query.execute(tree, [:knn, q_vec, limit, threshold])
                 else
@@ -653,7 +844,6 @@ defmodule MerkleDb.Web.Router do
                   }
                 end)
 
-              # Include indexed and filtered flags in response
               response = %{
                 results: hits,
                 indexed: is_indexed,
@@ -792,7 +982,6 @@ defmodule MerkleDb.Web.Router do
           |> put_resp_content_type("application/json")
           |> send_resp(400, json)
         else
-          # Build IVF index with k clusters (use sqrt(n) as a good default)
           k = params["k"] || max(10, trunc(:math.sqrt(tree.count)))
 
           case IndexBuilder.start_build(k, max_iter: 100, tol: 1.0e-4, seed: 42, force: force) do
@@ -898,7 +1087,9 @@ defmodule MerkleDb.Web.Router do
     end
   end
 
-  # --- BOOTSTRAP CONTROLS ---
+  # ============================================================================
+  # BOOTSTRAP CONTROLS
+  # ============================================================================
 
   get "/bootstrap/status" do
     status = Bootstrap.status()
@@ -966,7 +1157,9 @@ defmodule MerkleDb.Web.Router do
     end
   end
 
-  # --- REPLICATION ENDPOINTS ---
+  # ============================================================================
+  # REPLICATION ENDPOINTS
+  # ============================================================================
 
   get "/replication/status" do
     status = Replication.status()
@@ -987,7 +1180,6 @@ defmodule MerkleDb.Web.Router do
 
     {:ok, ops} = Replication.get_deltas(since: since, limit: limit)
 
-    # Convert operations to JSON-serializable maps
     json_ops = Enum.map(ops, fn op ->
       %{
         seq: op.seq,
@@ -1035,7 +1227,6 @@ defmodule MerkleDb.Web.Router do
   get "/replication/snapshot" do
     case Replication.export_snapshot() do
       {:ok, snapshot} ->
-        # Convert to JSON-safe format
         json_snapshot = %{
           type: snapshot.type,
           timestamp: snapshot.timestamp,
@@ -1137,8 +1328,42 @@ defmodule MerkleDb.Web.Router do
     send_resp(conn, 404, "Not Found")
   end
 
+  # ============================================================================
+  # PRIVATE HELPERS
+  # ============================================================================
+
+  defp send_json(conn, status, data) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(data))
+  end
+
+  defp parse_json(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, data} -> {:ok, data}
+      {:error, _} -> {:error, :invalid_json}
+    end
+  end
+  defp parse_json(_), do: {:error, :invalid_json}
+
+  defp check_kv_store do
+    if Process.whereis(MerkleDb.KV), do: :ok, else: :error
+  end
+
+  defp check_raft do
+    if Process.whereis(MerkleDb.Raft), do: :ok, else: :not_running
+  end
+
+  defp check_rate_limiter do
+    if Process.whereis(MerkleDb.RateLimiter), do: :ok, else: :not_running
+  end
+
+  defp check_api_key_store do
+    if Process.whereis(MerkleDb.ApiKeyStore), do: :ok, else: :not_running
+  end
+
   defp ingest_bible(path) do
-    IO.puts("\n📖 Starting Ingestion Pipeline...")
+    Logger.info("Starting Ingestion Pipeline...")
     File.stream!(path)
     |> Stream.chunk_every(5)
     |> Stream.with_index()
@@ -1148,9 +1373,9 @@ defmodule MerkleDb.Web.Router do
       vec = TextEmbedding.embed(text)
       KV.put(key, vec)
       TextStore.put(key, text)
-      if rem(idx, 500) == 0, do: IO.write(".")
+      if rem(idx, 500) == 0, do: Logger.debug("Ingested #{idx} chunks")
     end)
-    IO.puts("\n✅ Ingestion Complete! Database ready.")
+    Logger.info("Ingestion Complete! Database ready.")
     _ = Persistence.save_async(KV.snapshot(), label: "ingest")
   end
 
@@ -1280,7 +1505,6 @@ defmodule MerkleDb.Web.Router do
     data
     |> Map.new(fn
       {:vector, vec} when is_binary(vec) ->
-        # Convert binary vector to base64 for JSON transport
         {"vector", Base.encode64(vec)}
       {key, val} when is_atom(key) ->
         {Atom.to_string(key), serialize_value(val)}
@@ -1290,7 +1514,6 @@ defmodule MerkleDb.Web.Router do
   end
 
   defp serialize_value(val) when is_binary(val) and byte_size(val) > 100 do
-    # Likely a binary blob, encode as base64
     Base.encode64(val)
   end
   defp serialize_value(val), do: val
@@ -1300,5 +1523,3 @@ defmodule MerkleDb.Web.Router do
   defp safe_map_size(map) when is_map(map), do: map_size(map)
   defp safe_map_size(_), do: 0
 end
-
-

@@ -8,8 +8,12 @@ defmodule MerkleDb.VectorCache do
   alias MerkleDb.Telemetry
 
   @table_name :merkle_vector_cache
-  @max_cache_size 10_000  # Maximum cached entries
-  @ttl_seconds 3600       # 1 hour TTL
+
+  # Configurable via Application.get_env(:merkle_db, :cache_max_entries, 10_000)
+  defp max_cache_size, do: Application.get_env(:merkle_db, :cache_max_entries, 10_000)
+
+  # Configurable via Application.get_env(:merkle_db, :cache_ttl_seconds, 3600)
+  defp ttl_seconds, do: Application.get_env(:merkle_db, :cache_ttl_seconds, 3600)
 
   # ==================== Client API ====================
 
@@ -60,8 +64,9 @@ defmodule MerkleDb.VectorCache do
   @doc """
   Put value in cache with TTL.
   """
-  def put(key, value, ttl_seconds \\ @ttl_seconds) do
-    expires_at = :erlang.monotonic_time(:second) + ttl_seconds
+  def put(key, value, ttl \\ nil) do
+    ttl = ttl || ttl_seconds()
+    expires_at = :erlang.monotonic_time(:second) + ttl
     :ets.insert(@table_name, {key, value, expires_at})
 
     # Evict oldest entries if cache is too large
@@ -89,9 +94,9 @@ defmodule MerkleDb.VectorCache do
 
     %{
       size: size,
-      max_size: @max_cache_size,
+      max_size: max_cache_size(),
       memory_mb: memory_mb,
-      ttl_seconds: @ttl_seconds
+      ttl_seconds: ttl_seconds()
     }
   end
 
@@ -125,10 +130,11 @@ defmodule MerkleDb.VectorCache do
 
   defp maybe_evict do
     size = :ets.info(@table_name, :size)
+    max_size = max_cache_size()
 
-    if size > @max_cache_size do
+    if size > max_size do
       # Evict oldest 10% of entries
-      evict_count = div(@max_cache_size, 10)
+      evict_count = div(max_size, 10)
 
       # Get entries sorted by expiration time (oldest first)
       entries =
