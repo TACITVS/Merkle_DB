@@ -75,10 +75,13 @@ defmodule MerkleDb.Raft.Machine do
         end
 
       {:reset, collection} ->
-        if Map.has_key?(collections, collection) do
-          {Map.put(collections, collection, Tree.new()), :ok}
-        else
-          {collections, {:error, :collection_not_found}}
+        case Map.get(collections, collection) do
+          nil ->
+            {collections, {:error, :collection_not_found}}
+          old_tree ->
+            # Preserve the original dim and precision settings when resetting
+            new_tree = Tree.new(dim: old_tree.dim, precision: old_tree.precision)
+            {Map.put(collections, collection, new_tree), :ok}
         end
 
       {:drop_collection, name} ->

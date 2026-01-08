@@ -141,7 +141,7 @@ defmodule MerkleDb.KV do
 
   @impl true
   def handle_call(msg, _from, state) do
-    Logger.warn("KV received unhandled call: #{inspect(msg)}")
+    Logger.warning("KV received unhandled call: #{inspect(msg)}")
     {:reply, {:error, :unhandled}, state}
   end
 

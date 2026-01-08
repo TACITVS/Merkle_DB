@@ -1,10 +1,14 @@
 defmodule MerkleDb.Storage do
   # Simple CAS (Content Addressable Storage) using ETS
-  
+
   def init do
     # Named table, public read/write for performance
-    if :ets.info(:merkle_nodes) == :undefined do
+    # Use try-catch to handle race condition where multiple processes
+    # might try to create the table simultaneously
+    try do
       :ets.new(:merkle_nodes, [:set, :public, :named_table])
+    rescue
+      ArgumentError -> :ok  # Table already exists, created by another process
     end
     :ok
   end
@@ -20,7 +24,7 @@ defmodule MerkleDb.Storage do
       [] -> nil
     end
   end
-  
+
   def all_keys do
     # Debugging helper
     :ets.match(:merkle_nodes, {:"$1", :_}) |> List.flatten()
