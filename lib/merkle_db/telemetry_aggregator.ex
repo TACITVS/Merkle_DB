@@ -6,7 +6,8 @@ defmodule MerkleDb.TelemetryAggregator do
   use GenServer
   alias MerkleDb.{Bootstrap, BuildInfo, FPDispatcher, FPInventory, KV, LoadGenerator, Progress, Tree, VectorCache}
 
-  @window_size 100  # Keep last 100 queries for percentile calculations
+  # Configurable window size for rolling metrics
+  defp window_size, do: Application.get_env(:merkle_db, :telemetry_window_size, 100)
   @table_name :telemetry_aggregator
   @metrics_table :telemetry_metrics_snapshot
   @metrics_key :snapshot
@@ -111,8 +112,8 @@ defmodule MerkleDb.TelemetryAggregator do
     # Add to rolling window
     new_queue = :queue.in(duration_ms, state.query_durations)
 
-    # Keep only last @window_size queries
-    trimmed_queue = if :queue.len(new_queue) > @window_size do
+    # Keep only last window_size() queries
+    trimmed_queue = if :queue.len(new_queue) > window_size() do
       {_, q} = :queue.out(new_queue)
       q
     else

@@ -1,0 +1,64 @@
+## MerkleDb Erlang VM Arguments
+## This file is evaluated at runtime.
+
+## Name of the node
+-name <%= @release.name %>@127.0.0.1
+
+## Cookie for distributed erlang
+-setcookie <%= @release.cookie %>
+
+## Heartbeat management; auto-restarts VM if it dies or becomes unresponsive
+## (Alarm, suspend, crash, etc. can cause this)
+-heart
+
+## Enable SMP (symmetric multi-processing)
+-smp auto
+
+## Number of async threads (default is 1, increase for I/O bound workloads)
++A 64
+
+## Maximum number of atoms (default is 1M)
++t 2097152
+
+## Maximum number of ETS tables
++e 65536
+
+## Increase number of concurrent ports/sockets
+-env ERL_MAX_PORTS 65536
+
+## Increase number of concurrent processes (default is 262144)
++P 1048576
+
+## Erlang scheduler configuration
+## Bind schedulers to cores for better performance
++sbt db
+
+## Dirty schedulers for NIFs (important for AVX2 operations)
++SDcpu 8:8
++SDio 16
+
+## Memory allocator settings for high-throughput workloads
++MBas aobf
++MBscs 512
++MBlmbcs 1024
+
+## Kernel poll (epoll on Linux, IOCP on Windows)
++K true
+
+## Enable binary heap (more efficient for large binaries)
++hms 8192
++hmbs 8192
+
+## Garbage collection settings
+## Full sweep after 65535 collections
+-env ERL_FULLSWEEP_AFTER 65535
+
+## Enable crash dumps for debugging
+-env ERL_CRASH_DUMP_SECONDS 30
+-env ERL_CRASH_DUMP logs/erl_crash.dump
+
+## Distribution buffer settings
++zdbbl 32768
+
+## Time warp mode for accurate time keeping
++C multi_time_warp
