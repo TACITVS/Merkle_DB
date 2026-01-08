@@ -480,22 +480,20 @@ defmodule MerkleDb.Query do
       else
         indices_bin = for idx <- valid_indices, into: <<>>, do: <<idx::little-signed-32>>
 
-        # Fallback to f64 for indexed search if not yet implemented for f32
-        scores_bin = 
+        # Compute scores for indexed vectors (supports both f32 and f64)
+        scores_list =
           if tree.precision == :f32 do
-             # For now, let's assume we want to support f32 indexed too.
-             # If NIF is missing, this will fail.
-             # I implemented fp_query_gemv_f32_batch, but not fp_query_gemv_indexed_f32.
-             # Let's keep it simple for now and use the batch kernel if we can.
-             ASM.fp_query_gemv_f32_batch(Tree.flatten(tree), q_norm_bin, count, dim)
-             # Wait, that's brute force. Let's just do manual loop for indexed f32 for now
-             # OR just use f64 for IVF for now.
-             raise "Indexed search not yet implemented for f32"
-          else
-             ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
-          end
+             # F32 indexed search: compute dot products for each indexed vector individually
+             flat_data = Tree.flatten(tree)
 
-        scores_list = for <<s::little-float-size(64) <- scores_bin>>, do: s
+             for idx <- valid_indices do
+               vec_bin = binary_part(flat_data, idx * dim * elem_size, dim * elem_size)
+               ASM.fp_fold_dotp_f32(vec_bin, q_norm_bin, dim)
+             end
+          else
+             scores_bin = ASM.fp_query_gemv_indexed(tree.columns, q_norm_bin, indices_bin, count, dim)
+             for <<s::little-float-size(64) <- scores_bin>>, do: s
+          end
 
         Enum.zip(valid_indices, scores_list)
         |> Enum.filter(fn {_idx, score} -> score >= threshold end)
@@ -546,37 +544,50 @@ defmodule MerkleDb.Query do
         |> Enum.take(k)
         |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
       else
-        # Metadata filter path - Fallback path: Linear Scan (Slow)
-        # TODO: Fix and re-enable Bitmap Optimization (manual_nif_fp_query_gemv_bitmasked_f32)
-        
-        flat_data = Tree.flatten(tree)
-        
-        scores_list = 
-          for idx <- 0..(count - 1) do
-            vec_bin = binary_part(flat_data, idx * dim * elem_size, dim * elem_size)
-            if tree.precision == :f32 do
-              ASM.fp_fold_dotp_f32(vec_bin, q_norm_bin, dim)
-            else
-              ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
-            end
-          end
-        
-        scores_list
-        |> Enum.with_index()
-        |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
-        |> Enum.filter(fn {score, idx} -> score >= threshold and matches_where?(tree, idx, where_filter) end)
-        |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
-        |> Enum.take(k)
-        |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+        # Metadata filter path - try bitmap optimization for equality filters
+        case try_bitmap_optimization(tree, where_filter, count) do
+          {:ok, bitmap} when tree.precision == :f32 ->
+            # Use bitmap-optimized search for f32
+            scores_bin = ASM.fp_query_gemv_bitmasked_f32(tree.columns, q_norm_bin, bitmap, count, dim)
+
+            for <<s::little-float-32 <- scores_bin>>, do: (double = s; double)
+            |> Enum.with_index()
+            |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+            |> Enum.filter(fn {score, _idx} -> score >= threshold end)
+            |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
+            |> Enum.take(k)
+            |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+
+          _ ->
+            # Fallback path: Linear Scan (for non-equality filters or f64)
+            flat_data = Tree.flatten(tree)
+
+            scores_list =
+              for idx <- 0..(count - 1) do
+                vec_bin = binary_part(flat_data, idx * dim * elem_size, dim * elem_size)
+                if tree.precision == :f32 do
+                  ASM.fp_fold_dotp_f32(vec_bin, q_norm_bin, dim)
+                else
+                  ASM.fp_fold_dotp_f64(vec_bin, q_norm_bin, dim)
+                end
+              end
+
+            scores_list
+            |> Enum.with_index()
+            |> Enum.reject(fn {_score, idx} -> MapSet.member?(tombstones, idx) end)
+            |> Enum.filter(fn {score, idx} -> score >= threshold and matches_where?(tree, idx, where_filter) end)
+            |> Enum.sort_by(fn {score, _idx} -> score end, :desc)
+            |> Enum.take(k)
+            |> Enum.map(fn {score, idx} -> {Map.get(tree.keys, idx), score} end)
+        end
       end
     end
   end
 
   # ==================== Range Query Implementation ====================
 
+  defp execute_range(%{count: 0}, _query_vec, _min_sim, _max_sim, _limit, _where_filter), do: []
   defp execute_range(tree, query_vec, min_sim, max_sim, limit, where_filter) do
-    if tree.count == 0, do: []
-
     count = tree.count
     dim = tree.dim
     tombstones = tree.tombstones || MapSet.new()
@@ -763,7 +774,62 @@ defmodule MerkleDb.Query do
   defp get_in_path(_value, _parts), do: nil
 
   # ==================== Bitmap Indexing ====================
-  # (Bitmap indexing functions removed as they were unused in current implementation)
+
+  # Try to build a combined bitmap from equality filters using the inverted index.
+  # Returns {:ok, bitmap} if all filters are equality-based and have indexed values,
+  # otherwise returns :fallback to use linear scan.
+  defp try_bitmap_optimization(tree, filters, count) when is_list(filters) do
+    inverted_index = tree.inverted_index || %{}
+
+    # Check if all filters are equality-based and can use the inverted index
+    bitmaps =
+      Enum.reduce_while(filters, [], fn filter, acc ->
+        case extract_equality_filter(filter) do
+          {:ok, field, value} ->
+            field_str = if is_atom(field), do: Atom.to_string(field), else: field
+            case get_in(inverted_index, [field_str, value]) do
+              nil ->
+                # Also try atom key
+                case get_in(inverted_index, [field, value]) do
+                  nil -> {:halt, :fallback}
+                  bitmap -> {:cont, [bitmap | acc]}
+                end
+              bitmap -> {:cont, [bitmap | acc]}
+            end
+          :not_equality ->
+            {:halt, :fallback}
+        end
+      end)
+
+    case bitmaps do
+      :fallback -> :fallback
+      [] -> :fallback
+      [single] ->
+        # Ensure bitmap is properly sized
+        {:ok, ensure_bitmap_size(single, count)}
+      [first | rest] ->
+        # AND all bitmaps together
+        combined = Enum.reduce(rest, first, fn b, acc -> ASM.fp_bitmap_and(acc, b) end)
+        {:ok, ensure_bitmap_size(combined, count)}
+    end
+  end
+  defp try_bitmap_optimization(_, _, _), do: :fallback
+
+  # Extract field and value from equality filters only
+  defp extract_equality_filter({field, op, value}) when op in [:eq, "=="], do: {:ok, field, value}
+  defp extract_equality_filter([field, op, value]) when op in [:eq, "=="], do: {:ok, field, value}
+  defp extract_equality_filter(_), do: :not_equality
+
+  # Ensure bitmap is padded to the expected size
+  defp ensure_bitmap_size(bitmap, count) do
+    expected_bytes = div(count + 63, 64) * 8
+    current_size = byte_size(bitmap)
+    if current_size >= expected_bytes do
+      bitmap
+    else
+      <<bitmap::binary, 0::size((expected_bytes - current_size) * 8)>>
+    end
+  end
 
   defp safe_existing_atom(value) do
     try do
