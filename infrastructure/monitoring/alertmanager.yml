@@ -1,0 +1,56 @@
+# Alertmanager Configuration for MerkleDB
+
+global:
+  resolve_timeout: 5m
+  smtp_from: 'alerts@example.com'
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_auth_username: 'alerts@example.com'
+  smtp_auth_password: 'your-password-here'
+
+# Route alerts to receivers
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'team-email'
+
+  routes:
+    # Critical alerts go to PagerDuty
+    - match:
+        severity: critical
+      receiver: 'pagerduty'
+      continue: true
+
+    # Warning alerts to Slack
+    - match:
+        severity: warning
+      receiver: 'slack'
+
+# Receivers - configure based on your notification channels
+receivers:
+  - name: 'team-email'
+    email_configs:
+      - to: 'team@example.com'
+        headers:
+          Subject: 'MerkleDB Alert: {{ .GroupLabels.alertname }}'
+
+  - name: 'slack'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts'
+        title: 'MerkleDB Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}'
+
+  - name: 'pagerduty'
+    pagerduty_configs:
+      - service_key: 'your-pagerduty-service-key'
+        description: '{{ .GroupLabels.alertname }}: {{ .Annotations.summary }}'
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']

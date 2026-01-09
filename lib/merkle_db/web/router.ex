@@ -148,6 +148,14 @@ defmodule MerkleDb.Web.Router do
   @doc """
   Detailed health check with metrics.
   """
+  get "/metrics" do
+    # Prometheus metrics endpoint
+    metrics_text = MerkleDb.Web.PrometheusExporter.export_metrics()
+    conn
+    |> put_resp_content_type("text/plain; version=0.0.4")
+    |> send_resp(200, metrics_text)
+  end
+
   get "/health/detailed" do
     tree = KV.snapshot()
 

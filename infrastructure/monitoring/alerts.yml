@@ -1,0 +1,110 @@
+# Prometheus Alerting Rules for MerkleDB
+
+groups:
+  - name: merkledb_alerts
+    interval: 30s
+    rules:
+      # Service availability alerts
+      - alert: MerkleDBDown
+        expr: up{job="merkledb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "MerkleDB instance is down"
+          description: "MerkleDB instance {{ $labels.instance }} has been down for more than 1 minute"
+
+      - alert: MerkleDBHealthCheckFailing
+        expr: merkledb_health_status == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "MerkleDB health check failing"
+          description: "MerkleDB instance {{ $labels.instance }} is reporting unhealthy status"
+
+      # Raft consensus alerts
+      - alert: MerkleDBNoRaftLeader
+        expr: sum(merkledb_raft_leader) == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: raft
+        annotations:
+          summary: "No Raft leader elected"
+          description: "MerkleDB cluster has no Raft leader for more than 1 minute"
+
+      # Performance alerts
+      - alert: MerkleDBHighQueryLatency
+        expr: rate(merkledb_query_duration_seconds_sum[5m]) / rate(merkledb_query_duration_seconds_count[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "High query latency detected"
+          description: "Average query latency is {{ $value }}s on {{ $labels.instance }}"
+
+      - alert: MerkleDBLowCacheHitRate
+        expr: merkledb_cache_hit_rate < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is {{ $value }} on {{ $labels.instance }} (threshold: 0.5)"
+
+      # Resource alerts
+      - alert: MerkleDBHighMemoryUsage
+        expr: merkledb_memory_usage_bytes > 8589934592  # 8GB
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanize }}B on {{ $labels.instance }}"
+
+      - alert: MerkleDBLargeVectorCount
+        expr: merkledb_vector_count > 5000000  # 5M vectors
+        for: 1h
+        labels:
+          severity: info
+          component: capacity
+        annotations:
+          summary: "Large vector database"
+          description: "Vector count is {{ $value }} on {{ $labels.instance }} - consider scaling"
+
+      # System resource alerts (from node_exporter)
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: HighDiskUsage
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 20
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: SystemMemoryPressure
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "High system memory usage"
+          description: "System memory usage is {{ $value }}% on {{ $labels.instance }}"
