@@ -1200,10 +1200,9 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/replication/apply" do
-    {:ok, body, conn} = read_body(conn)
-
-    case Jason.decode(body) do
-      {:ok, %{"operations" => operations}} when is_list(operations) ->
+    # Body is already parsed by Plug.Parsers middleware
+    case conn.body_params do
+      %{"operations" => operations} when is_list(operations) ->
         case Replication.apply_operations(operations) do
           {:ok, count} ->
             json = Jason.encode!(%{status: "applied", count: count})
@@ -1214,11 +1213,11 @@ defmodule MerkleDb.Web.Router do
             conn |> put_resp_content_type("application/json") |> send_resp(400, json)
         end
 
-      {:ok, _} ->
+      %{} ->
         json = Jason.encode!(%{error: "Missing operations array"})
         conn |> put_resp_content_type("application/json") |> send_resp(400, json)
 
-      {:error, _} ->
+      _ ->
         json = Jason.encode!(%{error: "Invalid JSON"})
         conn |> put_resp_content_type("application/json") |> send_resp(400, json)
     end
@@ -1247,12 +1246,8 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/replication/compact" do
-    {:ok, body, conn} = read_body(conn)
-    params = case Jason.decode(body) do
-      {:ok, p} -> p
-      _ -> %{}
-    end
-
+    # Body is already parsed by Plug.Parsers middleware
+    params = conn.body_params || %{}
     keep_last = params["keep_last"] || 10000
 
     case Replication.compact(keep_last: keep_last) do

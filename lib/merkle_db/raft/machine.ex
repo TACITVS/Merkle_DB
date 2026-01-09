@@ -29,20 +29,27 @@ defmodule MerkleDb.Raft.Machine do
         end
 
       {:put, collection, key, vector, metadata} ->
-        with {:ok, tree} <- get_tree(collections, collection) do
-          new_tree = Tree.insert(tree, key, vector, metadata)
-          {Map.put(collections, collection, new_tree), :ok}
-        else
-          err -> {collections, err}
+        tree = case get_tree(collections, collection) do
+          {:ok, t} -> t
+          {:error, :collection_not_found} ->
+            # Auto-create collection with inferred settings from vector
+            dim = div(byte_size(vector), 8)
+            Tree.new(dim: dim, precision: :f64)
         end
+        new_tree = Tree.insert(tree, key, vector, metadata)
+        {Map.put(collections, collection, new_tree), :ok}
 
       {:put_batch, collection, pairs} ->
-        with {:ok, tree} <- get_tree(collections, collection) do
-          new_tree = Tree.insert_batch(tree, pairs)
-          {Map.put(collections, collection, new_tree), :ok}
-        else
-          err -> {collections, err}
+        tree = case get_tree(collections, collection) do
+          {:ok, t} -> t
+          {:error, :collection_not_found} ->
+            # Auto-create collection with inferred settings from first vector
+            {_key, first_vec, _meta} = hd(pairs)
+            dim = div(byte_size(first_vec), 8)
+            Tree.new(dim: dim, precision: :f64)
         end
+        new_tree = Tree.insert_batch(tree, pairs)
+        {Map.put(collections, collection, new_tree), :ok}
 
       {:delete, collection, key} ->
         with {:ok, tree} <- get_tree(collections, collection) do
@@ -75,14 +82,8 @@ defmodule MerkleDb.Raft.Machine do
         end
 
       {:reset, collection} ->
-        case Map.get(collections, collection) do
-          nil ->
-            {collections, {:error, :collection_not_found}}
-          old_tree ->
-            # Preserve the original dim and precision settings when resetting
-            new_tree = Tree.new(dim: old_tree.dim, precision: old_tree.precision)
-            {Map.put(collections, collection, new_tree), :ok}
-        end
+        # Remove collection entirely so it can be auto-created with correct dimensions
+        {Map.delete(collections, collection), :ok}
 
       {:drop_collection, name} ->
         {Map.delete(collections, name), :ok}
