@@ -1,0 +1,54 @@
+[Unit]
+Description=MerkleDB Vector Database
+Documentation=https://github.com/TACITVS/Merkle_DB
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=merkledb
+Group=merkledb
+
+# Working directory
+WorkingDirectory=/opt/merkledb/current
+
+# Environment
+Environment="HOME=/opt/merkledb"
+Environment="LANG=en_US.UTF-8"
+Environment="MIX_ENV=prod"
+Environment="RELEASE_DISTRIBUTION=name"
+Environment="RELEASE_NODE=merkledb@hostname"
+
+# Erlang VM configuration
+Environment="ERL_MAX_PORTS=65536"
+Environment="ERL_CRASH_DUMP=/var/log/merkledb/erl_crash.dump"
+
+# Start/stop commands
+ExecStart=/opt/merkledb/current/bin/merkle_db daemon
+ExecStop=/opt/merkledb/current/bin/merkle_db stop
+ExecReload=/opt/merkledb/current/bin/merkle_db restart
+
+# Process management
+Restart=on-failure
+RestartSec=10s
+KillMode=process
+TimeoutStopSec=300
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/merkledb /var/log/merkledb
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=merkledb
+
+[Install]
+WantedBy=multi-user.target

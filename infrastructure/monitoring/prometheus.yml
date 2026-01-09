@@ -1,0 +1,56 @@
+# Prometheus Configuration for MerkleDB
+# Place in /etc/prometheus/prometheus.yml or mount in Docker
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'merkledb-production'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+# Load alerting rules
+rule_files:
+  - 'alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  # MerkleDB application metrics
+  - job_name: 'merkledb'
+    static_configs:
+      - targets:
+          - 'merkledb-node1:4001'
+          - 'merkledb-node2:4001'
+          - 'merkledb-node3:4001'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # MerkleDB health checks
+  - job_name: 'merkledb-health'
+    static_configs:
+      - targets:
+          - 'merkledb-node1:4001'
+          - 'merkledb-node2:4001'
+          - 'merkledb-node3:4001'
+    metrics_path: '/health/detailed'
+    scrape_interval: 30s
+
+  # Node exporter (system metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - 'merkledb-node1:9100'
+          - 'merkledb-node2:9100'
+          - 'merkledb-node3:9100'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
