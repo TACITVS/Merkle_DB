@@ -17,6 +17,9 @@ defmodule MerkleDb.Validator do
   @max_vector_dimensions 10_000
   @max_batch_size 10_000
 
+  @valid_filter_ops [:eq, :neq, :gt, :lt, :gte, :lte, :in, :not_in, :contains, :starts_with, :exists,
+                     "==", "!=", ">", "<", ">=", "<=", "in", "not_in", "contains", "starts_with", "exists"]
+
   @type validation_result :: :ok | {:error, String.t()}
 
   # Collection Validation
@@ -260,15 +263,12 @@ defmodule MerkleDb.Validator do
   def validate_filters([]), do: :ok
 
   def validate_filters(filters) when is_list(filters) do
-    valid_ops = [:eq, :neq, :gt, :lt, :gte, :lte, :in, :not_in, :contains, :starts_with, :exists,
-                 "==", "!=", ">", "<", ">=", "<=", "in", "not_in", "contains", "starts_with", "exists"]
-
     Enum.reduce_while(filters, :ok, fn filter, :ok ->
       case filter do
-        {field, op, _value} when (is_binary(field) or is_atom(field)) and op in valid_ops ->
+        {field, op, _value} when (is_binary(field) or is_atom(field)) and op in @valid_filter_ops ->
           {:cont, :ok}
 
-        [field, op, _value] when (is_binary(field) or is_atom(field)) and op in valid_ops ->
+        [field, op, _value] when (is_binary(field) or is_atom(field)) and op in @valid_filter_ops ->
           {:cont, :ok}
 
         _ ->

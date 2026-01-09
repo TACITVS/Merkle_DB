@@ -214,7 +214,7 @@ defmodule MerkleDb.Application do
     try do
       tree = MerkleDb.KV.snapshot()
       if tree.count > 0 do
-        MerkleDb.Persistence.save_sync(tree, label: "shutdown")
+        MerkleDb.Persistence.save(tree, label: "shutdown")
         Logger.info("Shutdown snapshot saved with #{tree.count} vectors")
       end
     rescue
@@ -224,18 +224,10 @@ defmodule MerkleDb.Application do
 
   defp leave_raft_cluster do
     try do
-      # Notify the cluster we're leaving
-      if Process.whereis(MerkleDb.Raft) do
-        # If we're the leader, trigger election before leaving
-        case MerkleDb.Raft.status() do
-          %{role: :leader} ->
-            Logger.info("Stepping down as Raft leader before shutdown")
-            # Give followers time to receive final logs
-            Process.sleep(500)
-          _ ->
-            :ok
-        end
-      end
+      # Give the cluster time to sync before we leave
+      # Ra handles leader stepping down automatically
+      Process.sleep(500)
+      Logger.info("Raft cluster notified of shutdown")
     rescue
       e -> Logger.warning("Raft cleanup failed: #{inspect(e)}")
     end
