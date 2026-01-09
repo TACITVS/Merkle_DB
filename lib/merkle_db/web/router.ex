@@ -193,8 +193,7 @@ defmodule MerkleDb.Web.Router do
 
   post "/v1/collections/:collection" do
     with :ok <- Validator.validate_collection_name(collection),
-         {:ok, body, conn} <- read_body(conn),
-         {:ok, params} <- parse_json(body) do
+         params when is_map(params) <- conn.body_params do
       opts =
         params
         |> Enum.map(fn {k, v} -> {String.to_atom(k), v} end)
@@ -258,9 +257,14 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/v1/:collection/vectors" do
+    # Plug.Parsers wraps JSON arrays in %{"_json" => [...]}
+    items = case conn.body_params do
+      %{"_json" => list} when is_list(list) -> list
+      list when is_list(list) -> list
+      _ -> []
+    end
+
     with :ok <- Validator.validate_collection_name(collection),
-         {:ok, body, conn} <- read_body(conn),
-         {:ok, items} when is_list(items) <- parse_json(body),
          :ok <- Validator.validate_batch(items) do
 
       batch = Enum.map(items, fn item ->
@@ -302,8 +306,7 @@ defmodule MerkleDb.Web.Router do
 
   post "/v1/:collection/search" do
     with :ok <- Validator.validate_collection_name(collection),
-         {:ok, body, conn} <- read_body(conn),
-         {:ok, params} <- parse_json(body),
+         params when is_map(params) <- conn.body_params,
          :ok <- Validator.validate_query_params(params) do
 
       k = params["k"] || 10
