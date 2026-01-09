@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # Staging MerkleDB instance
+  merkledb-staging:
+    image: merkledb:staging
+    container_name: merkledb-staging
+    hostname: merkledb-staging
+    restart: unless-stopped
+    env_file:
+      - staging.env
+    ports:
+      - "4001:4001"
+    volumes:
+      - merkledb-staging-data:/opt/merkledb/data
+      - merkledb-staging-logs:/var/log/merkledb
+      - ../testing:/opt/testing:ro
+    networks:
+      - staging-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4001/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Prometheus for monitoring tests
+  prometheus-staging:
+    image: prom/prometheus:latest
+    container_name: prometheus-staging
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    ports:
+      - "9091:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-staging-data:/prometheus
+    networks:
+      - staging-network
+
+  # Load testing tool (k6)
+  k6:
+    image: grafana/k6:latest
+    container_name: k6-load-test
+    volumes:
+      - ../testing/load:/scripts:ro
+    networks:
+      - staging-network
+    profiles:
+      - testing
+    command: run /scripts/load_test.js
+
+  # Integration test runner
+  test-runner:
+    image: merkledb:staging
+    container_name: test-runner
+    env_file:
+      - staging.env
+    environment:
+      - MERKLEDB_HOST=merkledb-staging
+      - MIX_ENV=test
+    volumes:
+      - ../../test:/opt/merkledb/test:ro
+      - ../testing:/opt/testing:ro
+    networks:
+      - staging-network
+    profiles:
+      - testing
+    command: mix test
+
+volumes:
+  merkledb-staging-data:
+  merkledb-staging-logs:
+  prometheus-staging-data:
+
+networks:
+  staging-network:
+    driver: bridge
