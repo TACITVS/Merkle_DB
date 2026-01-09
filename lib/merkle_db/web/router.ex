@@ -257,8 +257,14 @@ defmodule MerkleDb.Web.Router do
   end
 
   post "/v1/:collection/vectors" do
+    # Plug.Parsers wraps JSON arrays in %{"_json" => [...]}
+    items = case conn.body_params do
+      %{"_json" => list} when is_list(list) -> list
+      list when is_list(list) -> list
+      _ -> []
+    end
+
     with :ok <- Validator.validate_collection_name(collection),
-         items when is_list(items) <- conn.body_params,
          :ok <- Validator.validate_batch(items) do
 
       batch = Enum.map(items, fn item ->
