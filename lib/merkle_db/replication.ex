@@ -195,8 +195,12 @@ defmodule MerkleDb.Replication do
 
   @impl true
   def handle_call({:apply_operations, operations}, _from, state) do
-    applied = apply_ops(operations)
-    {:reply, {:ok, applied}, state}
+    case apply_ops(operations) do
+      {:ok, count} ->
+        {:reply, {:ok, count}, state}
+      {:error, reason, partial_count} ->
+        {:reply, {:error, reason, partial_count}, state}
+    end
   end
 
   @impl true
@@ -266,9 +270,11 @@ defmodule MerkleDb.Replication do
   end
 
   defp apply_ops(operations) do
-    Enum.reduce(operations, 0, fn op, count ->
-      apply_single_op(op)
-      count + 1
+    Enum.reduce_while(operations, {:ok, 0}, fn op, {:ok, count} ->
+      case apply_single_op(op) do
+        :ok -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason, count}}
+      end
     end)
   end
 
@@ -276,12 +282,23 @@ defmodule MerkleDb.Replication do
     vector = data.vector || data[:vector]
     payload = data.payload || data[:payload] || %{}
 
-    if vector do
-      :ok = KV.put(key, vector)
+    result = if vector do
+      case KV.put(key, vector) do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
     end
 
-    if payload && map_size(payload) > 0 do
-      PayloadStore.put(key, payload)
+    case result do
+      :ok ->
+        if payload && map_size(payload) > 0 do
+          PayloadStore.put(key, payload)
+        end
+        :ok
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
